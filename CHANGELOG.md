@@ -1,3 +1,10 @@
+## [1.2.5](https://github.com/tamnguyenvan/screenarc/compare/v1.2.4...v1.2.5) (2026-03-03)
+
+
+### Bug Fixes
+
+* remove duplicate code from bad merge in recording-manager, desktop handler, and transform ([493609c](https://github.com/tamnguyenvan/screenarc/commit/493609c65752de0f8ddb735b7731b792c1b736d9)), closes [#142](https://github.com/tamnguyenvan/screenarc/issues/142) [#146](https://github.com/tamnguyenvan/screenarc/issues/146)
+
 ## [1.2.4](https://github.com/tamnguyenvan/screenarc/compare/v1.2.3...v1.2.4) (2026-03-03)
 
 
