@@ -156,6 +156,36 @@ export const calculateZoomTransform = (
   let currentTranslateY = 0
 
   // --- Calculate Pan Targets ---
+  let initialPan = { tx: 0, ty: 0 }
+  let livePan = { tx: 0, ty: 0 }
+  let finalPan = { tx: 0, ty: 0 }
+
+  if (mode === 'auto' && metadata.length > 0 && recordingGeometry.width > 0) {
+    // Pan target for the end of the zoom-in transition (STATIONARY)
+    const initialMousePos = getSmoothedMousePosition(metadata, zoomInEndTime)
+    initialPan = calculateBoundedPan(initialMousePos, fixedOrigin, zoomLevel, recordingGeometry, frameContentDimensions)
+
+    // Live pan target for the hold phase (DYNAMIC)
+    const liveMousePos = getSmoothedMousePosition(metadata, currentTime)
+    livePan = calculateBoundedPan(liveMousePos, fixedOrigin, zoomLevel, recordingGeometry, frameContentDimensions)
+
+    // Pan target for the start of the zoom-out transition (STATIONARY)
+    const finalMousePos = getSmoothedMousePosition(metadata, zoomOutStartTime)
+    finalPan = calculateBoundedPan(finalMousePos, fixedOrigin, zoomLevel, recordingGeometry, frameContentDimensions)
+  }
+
+  // --- Determine current transform based on phase ---
+
+  // Phase 1: ZOOM-IN (Smoothly pan towards initial mouse position)
+  if (currentTime >= startTime && currentTime < zoomInEndTime) {
+    const t = (EASING_MAP[easing as keyof typeof EASING_MAP] || EASING_MAP.Balanced)(
+      (currentTime - startTime) / transitionDuration,
+    )
+    currentScale = lerp(1, zoomLevel, t)
+    // Fix for #132: Smoothly interpolate translateX/Y during zoom-in to prevent repositioning jump
+    currentTranslateX = lerp(0, initialPan.tx, t)
+    currentTranslateY = lerp(0, initialPan.ty, t)
+  }
   // let initialPan = { tx: 0, ty: 0 }
   let livePan = { tx: 0, ty: 0 }
   let finalPan = { tx: 0, ty: 0 }
