@@ -13,6 +13,27 @@ import { CursorTheme } from '../../types'
 
 export function getDisplays() {
   const primaryDisplay = screen.getPrimaryDisplay()
+  return screen.getAllDisplays().map((display, index) => {
+    // Fix for #135: Use scaleFactor to get physical pixel dimensions
+    // display.bounds returns screen coordinates (scaled), but we need physical pixels
+    // for accurate screen capture with FFmpeg
+    const scaleFactor = display.scaleFactor
+    const physicalBounds = {
+      x: Math.round(display.bounds.x * scaleFactor),
+      y: Math.round(display.bounds.y * scaleFactor),
+      width: Math.round(display.bounds.width * scaleFactor),
+      height: Math.round(display.bounds.height * scaleFactor),
+    }
+    return {
+      id: display.id,
+      name: `Display ${index + 1} (${physicalBounds.width}x${physicalBounds.height})`,
+      bounds: physicalBounds,
+      isPrimary: display.id === primaryDisplay.id,
+      scaleFactor,
+    }
+  })
+}
+  const primaryDisplay = screen.getPrimaryDisplay()
   return screen.getAllDisplays().map((display, index) => ({
     id: display.id,
     name: `Display ${index + 1} (${display.bounds.width}x${display.bounds.height})`,

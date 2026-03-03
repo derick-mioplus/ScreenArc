@@ -322,6 +322,19 @@ export async function startRecording(options: any) {
   if (source === 'fullscreen') {
     const allDisplays = screen.getAllDisplays()
     const targetDisplay = allDisplays.find((d) => d.id === displayId) || screen.getPrimaryDisplay()
+    // Fix for #135: Use scaleFactor to get physical pixel dimensions
+    // display.bounds returns screen coordinates (scaled), but FFmpeg needs physical pixels
+    const scaleFactor = targetDisplay.scaleFactor
+    const x = Math.round(targetDisplay.bounds.x * scaleFactor)
+    const y = Math.round(targetDisplay.bounds.y * scaleFactor)
+    const width = Math.round(targetDisplay.bounds.width * scaleFactor)
+    const height = Math.round(targetDisplay.bounds.height * scaleFactor)
+    const safeWidth = Math.floor(width / 2) * 2
+    const safeHeight = Math.floor(height / 2) * 2
+    recordingGeometry = { x, y, width: safeWidth, height: safeHeight }
+  if (source === 'fullscreen') {
+    const allDisplays = screen.getAllDisplays()
+    const targetDisplay = allDisplays.find((d) => d.id === displayId) || screen.getPrimaryDisplay()
     const { x, y, width, height } = targetDisplay.bounds
     const safeWidth = Math.floor(width / 2) * 2
     const safeHeight = Math.floor(height / 2) * 2
