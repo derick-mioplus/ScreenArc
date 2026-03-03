@@ -33,14 +33,6 @@ export function getDisplays() {
     }
   })
 }
-  const primaryDisplay = screen.getPrimaryDisplay()
-  return screen.getAllDisplays().map((display, index) => ({
-    id: display.id,
-    name: `Display ${index + 1} (${display.bounds.width}x${display.bounds.height})`,
-    bounds: display.bounds,
-    isPrimary: display.id === primaryDisplay.id,
-  }))
-}
 
 export function handleGetCursorScale() {
   return getCursorScale()

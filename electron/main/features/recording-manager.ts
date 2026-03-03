@@ -216,57 +216,6 @@ function buildFfmpegArgs(
 
   return finalArgs
 }
- * Constructs the final FFmpeg command arguments by mapping input streams to output files.
- */
-function buildFfmpegArgs(
-  inputArgs: string[],
-  hasWebcam: boolean,
-  hasMic: boolean,
-  screenOut: string,
-  webcamOut?: string,
-): string[] {
-  const finalArgs = [...inputArgs]
-  // Determine the index of each input stream (mic, webcam, screen)
-  const micIndex = hasMic ? 0 : -1
-  const webcamIndex = hasMic ? (hasWebcam ? 1 : -1) : hasWebcam ? 0 : -1
-  const screenIndex = (hasMic ? 1 : 0) + (hasWebcam ? 1 : 0)
-
-  // Map screen video stream
-  finalArgs.push(
-    '-map',
-    `${screenIndex}:v`,
-    '-c:v',
-    'libx264',
-    '-preset',
-    'ultrafast',
-    '-pix_fmt',
-    'yuv420p',
-    screenOut,
-  )
-
-  // Map audio stream if present
-  if (hasMic) {
-    finalArgs.push('-map', `${micIndex}:a`, '-c:a', 'aac', '-b:a', '192k')
-  }
-
-  // Map webcam video stream if present
-  if (hasWebcam && webcamOut) {
-    finalArgs.push(
-      '-map',
-      `${webcamIndex}:v`,
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-pix_fmt',
-      'yuv420p',
-      webcamOut,
-    )
-  }
-
-  return finalArgs
-}
-
 /**
  * Creates the system tray icon and context menu for controlling an active recording.
  */
@@ -380,13 +329,6 @@ export async function startRecording(options: any) {
     const y = Math.round(targetDisplay.bounds.y * scaleFactor)
     const width = Math.round(targetDisplay.bounds.width * scaleFactor)
     const height = Math.round(targetDisplay.bounds.height * scaleFactor)
-    const safeWidth = Math.floor(width / 2) * 2
-    const safeHeight = Math.floor(height / 2) * 2
-    recordingGeometry = { x, y, width: safeWidth, height: safeHeight }
-  if (source === 'fullscreen') {
-    const allDisplays = screen.getAllDisplays()
-    const targetDisplay = allDisplays.find((d) => d.id === displayId) || screen.getPrimaryDisplay()
-    const { x, y, width, height } = targetDisplay.bounds
     const safeWidth = Math.floor(width / 2) * 2
     const safeHeight = Math.floor(height / 2) * 2
     recordingGeometry = { x, y, width: safeWidth, height: safeHeight }
