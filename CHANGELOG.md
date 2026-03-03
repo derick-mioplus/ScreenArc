@@ -1,3 +1,10 @@
+## [1.2.4](https://github.com/tamnguyenvan/screenarc/compare/v1.2.3...v1.2.4) (2026-03-03)
+
+
+### Bug Fixes
+
+* externalize native modules for proper runtime loading ([23678c9](https://github.com/tamnguyenvan/screenarc/commit/23678c9635568e5e3255a7d5b9cce6075382933e)), closes [#137](https://github.com/tamnguyenvan/screenarc/issues/137)
+
 ## [1.2.3](https://github.com/tamnguyenvan/screenarc/compare/v1.2.2...v1.2.3) (2026-03-03)
 
 
