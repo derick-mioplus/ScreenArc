@@ -218,7 +218,7 @@ const ProgressView = ({ progress, onCancel }: { progress: number; onCancel: () =
         style={{ width: `${progress}%` }}
       />
     </div>
-    <p className="text-sm font-semibold text-primary mt-4 tabular-nums">{Math.round(progress)}%</p>
+    <p className="text-sm font-semibold text-primary mt-4 tabular-nums">{progress < 0.1 ? '< 1' : Math.round(progress)}%</p>
     <Button variant="secondary" onClick={onCancel} className="mt-8 w-full">
       Cancel
     </Button>

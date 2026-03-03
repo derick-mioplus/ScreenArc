@@ -104,6 +104,7 @@
       "node_modules/node-win-cursor/**/*",
       "node_modules/x11/**/*"
     ],
+    "asarUnpack": [
       "binaries/**"
     ],
     "win": {
