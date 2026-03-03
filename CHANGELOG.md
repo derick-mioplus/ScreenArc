@@ -1,3 +1,14 @@
+## [1.2.3](https://github.com/tamnguyenvan/screenarc/compare/v1.2.2...v1.2.3) (2026-03-03)
+
+
+### Bug Fixes
+
+* account for display scaleFactor on Windows ([769453a](https://github.com/tamnguyenvan/screenarc/commit/769453a1cf921dd1d3ba8cd77afc91a956b0311a)), closes [#135](https://github.com/tamnguyenvan/screenarc/issues/135)
+* improve export progress display to show < 1% initially ([e6edb1a](https://github.com/tamnguyenvan/screenarc/commit/e6edb1ae0a558cc65a820ea95c6de3d3acfb26c1)), closes [#133](https://github.com/tamnguyenvan/screenarc/issues/133)
+* output electron main process as .cjs to fix macOS ESM error ([ab1e0c3](https://github.com/tamnguyenvan/screenarc/commit/ab1e0c307653134102c11b525e5df5ecdf31bfb7)), closes [#138](https://github.com/tamnguyenvan/screenarc/issues/138) [#131](https://github.com/tamnguyenvan/screenarc/issues/131)
+* route audio to screen.mp4 instead of webcam.mp4 ([3e15a7f](https://github.com/tamnguyenvan/screenarc/commit/3e15a7fd7467178fe51831eda695de1d11b6dcb4)), closes [#130](https://github.com/tamnguyenvan/screenarc/issues/130)
+* smooth pan transition during zoom-in phase ([4a6839f](https://github.com/tamnguyenvan/screenarc/commit/4a6839fb75d7bafefc8cbee97fb4e1e7ff9eb26b)), closes [#132](https://github.com/tamnguyenvan/screenarc/issues/132)
+
 ## [1.2.2](https://github.com/tamnguyenvan/screenarc/compare/v1.2.1...v1.2.2) (2025-12-23)
 
 
