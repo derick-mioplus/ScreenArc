@@ -13,7 +13,7 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 export const VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 process.env.VITE_PUBLIC = VITE_PUBLIC
 
-export const PRELOAD_SCRIPT = path.join(process.env.APP_ROOT!, 'dist-electron/preload.mjs')
+export const PRELOAD_SCRIPT = path.join(process.env.APP_ROOT!, 'dist-electron/preload.cjs')
 
 // --- Recording ---
 export const MOUSE_RECORDING_FPS = 50
