@@ -1,3 +1,10 @@
+## [1.2.6](https://github.com/tamnguyenvan/screenarc/compare/v1.2.5...v1.2.6) (2026-03-06)
+
+
+### Bug Fixes
+
+* resolve dev setup failures on macOS with Node.js 24 ([7084dfa](https://github.com/tamnguyenvan/screenarc/commit/7084dfae13d01806d7f0aa8747a3e92e64cbae2f)), closes [#150](https://github.com/tamnguyenvan/screenarc/issues/150)
+
 ## [1.2.5](https://github.com/tamnguyenvan/screenarc/compare/v1.2.4...v1.2.5) (2026-03-03)
 
 
