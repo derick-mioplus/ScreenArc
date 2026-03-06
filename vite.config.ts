@@ -25,8 +25,14 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+            lib: {
+              entry: 'electron/main/index.ts',
+              formats: ['cjs'],
+              fileName: () => 'index.cjs',
+            },
             rollupOptions: {
               output: {
+                format: 'cjs',
                 entryFileNames: '[name].cjs',
               },
               // Fix for #137: Externalize native modules
@@ -46,6 +52,7 @@ export default defineConfig({
             outDir: 'dist-electron',
             rollupOptions: {
               output: {
+                format: 'cjs',
                 entryFileNames: '[name].cjs',
               },
             },

@@ -5,6 +5,9 @@
   "private": true,
   "version": "0.0.0-development",
   "type": "module",
+  "engines": {
+    "node": ">=18 <=22"
+  },
   "scripts": {
     "dev": "vite",
     "clean": "rimraf dist dist-electron",
@@ -103,9 +106,6 @@
       "node_modules/node-macos-cursor/**/*",
       "node_modules/node-win-cursor/**/*",
       "node_modules/x11/**/*"
-    ],
-    "asarUnpack": [
-      "binaries/**"
     ],
     "win": {
       "target": [
