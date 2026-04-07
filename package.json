@@ -91,6 +91,9 @@
   "build": {
     "appId": "com.screenarc.app",
     "productName": "ScreenArc",
+    "extraMetadata": {
+      "type": "commonjs"
+    },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
