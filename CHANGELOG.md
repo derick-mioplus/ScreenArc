@@ -1,3 +1,10 @@
+## [1.2.7](https://github.com/tamnguyenvan/screenarc/compare/v1.2.6...v1.2.7) (2026-04-08)
+
+
+### Bug Fixes
+
+* override package type to commonjs for macOS universal builds ([c02573b](https://github.com/tamnguyenvan/screenarc/commit/c02573b760073a70567dc8c5bcf7eeee6b415ee1)), closes [#153](https://github.com/tamnguyenvan/screenarc/issues/153)
+
 ## [1.2.6](https://github.com/tamnguyenvan/screenarc/compare/v1.2.5...v1.2.6) (2026-03-06)
 
 
