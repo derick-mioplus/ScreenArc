@@ -1,5 +1,3 @@
-> AI Image Upscaler, AI Object Remover, AI Online OCR (100% local, private and free)
-> Check it out: https://freeaitoolforthat.com/
 # ScreenArc 🎬
 
 <div align="center">
