@@ -130,9 +130,10 @@ export async function cleanupEditorFiles(files: {
   screenVideoPath: string
   metadataPath: string
   webcamVideoPath?: string
+  systemAudioPath?: string
 }) {
   log.info('[EditorWindow] Cleaning up session files:', files)
-  const unlinkPromises = [files.screenVideoPath, files.webcamVideoPath, files.metadataPath]
+  const unlinkPromises = [files.screenVideoPath, files.webcamVideoPath, files.metadataPath, files.systemAudioPath]
     .filter(Boolean)
     .map((filePath) => (fsSync.existsSync(filePath!) ? fs.unlink(filePath!) : Promise.resolve()))
   try {

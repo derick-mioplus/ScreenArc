@@ -34,6 +34,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('recording:start', recordingHandlers.handleStartRecording)
   ipcMain.on('recording:stop', recordingHandlers.handleStopRecording)
   ipcMain.handle('recording:load-from-file', recordingHandlers.handleLoadVideoFromFile)
+  ipcMain.handle('recording:write-system-audio', recordingHandlers.handleWriteSystemAudioChunk)
+  ipcMain.handle('recording:system-audio-stopped', recordingHandlers.handleSystemAudioStopped)
 
   // Export
   ipcMain.handle('export:start', exportHandlers.handleStartExport)
