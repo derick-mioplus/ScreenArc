@@ -1,6 +1,6 @@
 // Entry point of the Electron application.
 
-import { app, BrowserWindow, protocol, ProtocolRequest, ProtocolResponse, Menu, screen, dialog, desktopCapturer, systemPreferences, shell } from 'electron'
+import { app, BrowserWindow, protocol, ProtocolRequest, ProtocolResponse, Menu, screen, dialog, desktopCapturer } from 'electron'
 import { initMain as initAudioLoopback } from 'electron-audio-loopback'
 import log from 'electron-log/main'
 import path from 'node:path'

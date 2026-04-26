@@ -34,7 +34,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "electron-builder install-app-deps"
+    "patch:electron-info-plist": "node scripts/patch-electron-info-plist.mjs",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-electron-info-plist.mjs"
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.1.12",
@@ -132,8 +133,10 @@
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.plist",
       "extendInfo": {
+        "NSScreenCaptureUsageDescription": "ScreenArc needs to record your computer's screen to capture video.",
         "NSAudioCaptureUsageDescription": "ScreenArc captures system audio so you can include it in your screen recordings.",
-        "NSMicrophoneUsageDescription": "ScreenArc records from the microphone when you enable it during a recording."
+        "NSMicrophoneUsageDescription": "ScreenArc records from the microphone when you enable it during a recording.",
+        "NSCameraUsageDescription": "ScreenArc accesses the camera when you enable webcam capture during a recording."
       },
       "target": [
         {

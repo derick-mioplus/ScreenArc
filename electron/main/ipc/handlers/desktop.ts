@@ -1,6 +1,6 @@
 // Handlers for desktop-related IPC (displays, sources, cursor).
 
-import { IpcMainEvent, IpcMainInvokeEvent, screen, dialog, app, systemPreferences, shell, desktopCapturer } from 'electron'
+import { IpcMainEvent, IpcMainInvokeEvent, screen, dialog, app, shell, desktopCapturer } from 'electron'
 import { exec } from 'node:child_process'
 import log from 'electron-log/main'
 import fs from 'node:fs/promises'
