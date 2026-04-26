@@ -106,6 +106,22 @@ export const electronAPI = {
     return () => ipcRenderer.removeListener('recorder:stop-system-audio', listener)
   },
 
+  // --- Renderer-side Screen Capture (macOS) ---
+  // AVFoundation's screen input is non-functional on macOS 14+ (Sequoia),
+  // so the screen video is captured in the renderer via getUserMedia
+  // (chromeMediaSource: 'desktop'), streamed as WebM/VP9 chunks to the main
+  // process, and muxed into the final MP4 alongside the optional mic track.
+  getScreenSources: (): Promise<{ id: string; name: string; display_id: string }[]> =>
+    ipcRenderer.invoke('recording:get-screen-sources'),
+  writeScreenVideoChunk: (chunk: ArrayBuffer): Promise<number> =>
+    ipcRenderer.invoke('recording:write-screen-video', chunk),
+  notifyScreenCaptureStopped: (): Promise<void> => ipcRenderer.invoke('recording:screen-capture-stopped'),
+  onStopScreenCapture: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('recorder:stop-screen-capture', listener)
+    return () => ipcRenderer.removeListener('recorder:stop-screen-capture', listener)
+  },
+
   getDisplays: (): Promise<DisplayInfo[]> => ipcRenderer.invoke('desktop:get-displays'),
   getDshowDevices: (): Promise<{ video: DshowDevice[]; audio: DshowDevice[] }> =>
     ipcRenderer.invoke('desktop:get-dshow-devices'),

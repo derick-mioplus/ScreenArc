@@ -19,9 +19,22 @@ export interface RecordingSession {
   webcamVideoPath?: string
   // Set when system-audio capture (renderer-side MediaRecorder) is enabled.
   // Cleared after the post-recording mux merges it into the screen file.
+  // On macOS the system audio is folded into screenWebmPath instead, so this
+  // stays unset there.
   systemAudioPath?: string
   // True when mic capture is enabled for this session. Drives mux filter graph.
   hasMicAudio?: boolean
+  // macOS only: renderer-recorded screen video (WebM/VP9), optionally with an
+  // Opus loopback audio track when the user enabled system audio. Cleared
+  // after the post-recording mux transcodes it into screenVideoPath (.mp4).
+  screenWebmPath?: string
+  // True when screenWebmPath contains a system-audio track (renderer added a
+  // loopback audio track to the MediaRecorder stream). Drives mux filter graph.
+  webmHasSystemAudio?: boolean
+  // macOS only: separate AAC/m4a file produced by FFmpeg when only mic capture
+  // is requested (since FFmpeg no longer captures the screen there). Cleared
+  // after mux folds it into screenVideoPath.
+  micAudioPath?: string
   recordingGeometry: RecordingGeometry
 }
 
