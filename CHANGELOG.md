@@ -1,3 +1,15 @@
+# [1.3.0](https://github.com/tamnguyenvan/screenarc/compare/v1.2.7...v1.3.0) (2026-04-26)
+
+
+### Bug Fixes
+
+* **macos:** harden system audio recording ([9ba8ad4](https://github.com/tamnguyenvan/screenarc/commit/9ba8ad4b18280192e8548c92834754e97f9f0af7))
+
+
+### Features
+
+* **macos:** record system audio into recordings ([e59b6b0](https://github.com/tamnguyenvan/screenarc/commit/e59b6b0550dc99f865344caf4be4845f9118fa45)), closes [#145](https://github.com/tamnguyenvan/screenarc/issues/145)
+
 ## [1.2.7](https://github.com/tamnguyenvan/screenarc/compare/v1.2.6...v1.2.7) (2026-04-08)
 
 
