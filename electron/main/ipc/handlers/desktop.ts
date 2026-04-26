@@ -1,6 +1,6 @@
 // Handlers for desktop-related IPC (displays, sources, cursor).
 
-import { IpcMainEvent, IpcMainInvokeEvent, screen, dialog, app } from 'electron'
+import { IpcMainEvent, IpcMainInvokeEvent, screen, dialog, app, systemPreferences, shell, desktopCapturer } from 'electron'
 import { exec } from 'node:child_process'
 import log from 'electron-log/main'
 import fs from 'node:fs/promises'
@@ -44,6 +44,45 @@ export function handleSetCursorScale(_event: IpcMainEvent, scale: number) {
 
 export function showSaveDialog(_event: IpcMainInvokeEvent, options: Electron.SaveDialogOptions) {
   return dialog.showSaveDialog(options)
+}
+
+export function showMessageBox(_event: IpcMainInvokeEvent, options: Electron.MessageBoxOptions) {
+  return dialog.showMessageBox(options)
+}
+
+export async function checkScreenRecordingPermission(_event: IpcMainInvokeEvent): Promise<'granted' | 'denied' | 'not-determined'> {
+  if (process.platform !== 'darwin') return 'granted'
+
+  // getMediaAccessStatus('screen') is unreliable on macOS 14+ (always returns
+  // 'granted'). Instead, probe with desktopCapturer: if permission is denied,
+  // getSources() returns an empty array on Sequoia.
+  let hasPermission = false
+  try {
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
+    log.info('[Permission] desktopCapturer returned', sources.length, 'sources:', sources.map(s => s.name))
+    hasPermission = sources.length > 0
+  } catch (e) {
+    log.warn('[Permission] desktopCapturer.getSources threw:', e)
+    hasPermission = false
+  }
+  log.info('[Permission] screen recording hasPermission:', hasPermission)
+
+  if (!hasPermission) {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Screen Recording Permission Required',
+      message: 'ScreenArc needs Screen Recording permission to capture system audio.',
+      detail: 'Click "Open Settings" to go to System Settings → Privacy & Security → Screen Recording and enable "Electron". Then restart the app and try again.',
+      buttons: ['Open Settings', 'Cancel'],
+      defaultId: 0,
+    })
+    if (response === 0) {
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    }
+    return 'denied'
+  }
+
+  return 'granted'
 }
 
 export async function getVideoFrame(

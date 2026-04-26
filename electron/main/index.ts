@@ -1,6 +1,6 @@
 // Entry point of the Electron application.
 
-import { app, BrowserWindow, protocol, ProtocolRequest, ProtocolResponse, Menu, screen, dialog } from 'electron'
+import { app, BrowserWindow, protocol, ProtocolRequest, ProtocolResponse, Menu, screen, dialog, desktopCapturer, systemPreferences, shell } from 'electron'
 import { initMain as initAudioLoopback } from 'electron-audio-loopback'
 import log from 'electron-log/main'
 import path from 'node:path'
@@ -98,6 +98,15 @@ app.whenReady().then(async () => {
 
   // Initialize platform-specific dependencies asynchronously
   initializeMouseTrackerDependencies()
+
+  // Proactively register this app with macOS Screen Recording TCC so it
+  // appears in System Settings → Privacy & Security → Screen Recording.
+  // This must run after the window is ready.
+  if (process.platform === 'darwin') {
+    desktopCapturer.getSources({ types: ['screen'] }).catch((e) => {
+      log.warn('[Permission] desktopCapturer.getSources failed at startup:', e)
+    })
+  }
 
   // Register custom protocol for media files
   protocol.registerFileProtocol(

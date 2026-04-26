@@ -165,6 +165,14 @@ export const electronAPI = {
     return ipcRenderer.invoke('dialog:showSaveDialog', options)
   },
 
+  showMessageBox: (options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> => {
+    return ipcRenderer.invoke('dialog:showMessageBox', options)
+  },
+
+  checkScreenRecordingPermission: (): Promise<'granted' | 'denied' | 'not-determined'> => {
+    return ipcRenderer.invoke('permission:check-screen-recording')
+  },
+
   showItemInFolder: (path: string): void => ipcRenderer.send('shell:showItemInFolder', path),
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => {

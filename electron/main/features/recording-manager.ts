@@ -5,7 +5,7 @@ import log from 'electron-log/main'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fsPromises from 'node:fs/promises'
-import { app, Menu, Tray, nativeImage, screen, ipcMain, dialog, systemPreferences } from 'electron'
+import { app, Menu, Tray, nativeImage, screen, ipcMain, dialog, systemPreferences, desktopCapturer } from 'electron'
 import { appState } from '../state'
 import { getFFmpegPath, ensureDirectoryExists } from '../lib/utils'
 import { VITE_PUBLIC } from '../lib/constants'
@@ -352,22 +352,30 @@ export async function startRecording(options: any) {
   // macOS Permissions Check
   if (process.platform === 'darwin') {
     // 1. Check Screen Recording Permissions
-    let screenAccess = systemPreferences.getMediaAccessStatus('screen')
-    if (screenAccess === 'not-determined') {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const iohook = require('iohook-macos')
-        const permissions = iohook.checkAccessibilityPermissions()
-        screenAccess = permissions.hasPermissions ? 'granted' : 'denied'
-      } catch (e) {
-        log.error('[MouseTracker] Failed to load macOS-specific modules. Mouse tracking on macOS will be disabled.', e)
-      }
+    // getMediaAccessStatus('screen') is unreliable on macOS 14+ (Sonoma/Sequoia)
+    // — always returns 'granted'. Probe via desktopCapturer instead: permission
+    // denied → empty sources array.
+    let screenGranted = false
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
+      screenGranted = sources.length > 0
+    } catch (e) {
+      log.warn('[Permission] desktopCapturer.getSources failed:', e)
     }
-    if (screenAccess !== 'granted') {
-      dialog.showErrorBox(
-        'Screen Recording Permission Required',
-        'Accessibility permissions required. Please go to System Preferences > Security & Privacy > Privacy > Accessibility and enable this application.',
-      )
+    if (!screenGranted) {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Screen Recording Permission Required',
+        message: 'ScreenArc needs Screen Recording permission to record your screen.',
+        detail:
+          'Go to System Settings → Privacy & Security → Screen Recording and enable the toggle next to "Electron" (the dev build). Then restart the app and try again.',
+        buttons: ['Open System Settings', 'Cancel'],
+        defaultId: 0,
+      })
+      if (response === 0) {
+        const { shell } = require('electron')
+        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+      }
       return { canceled: true }
     }
 
@@ -633,6 +641,17 @@ export async function stopRecording() {
 async function muxSystemAudio(session: RecordingSession): Promise<void> {
   if (!session.systemAudioPath) return
 
+  // If the screen file wasn't created (e.g. avfoundation permission failure),
+  // there is nothing to mux into — clean up and bail.
+  try {
+    await fsPromises.stat(session.screenVideoPath)
+  } catch {
+    log.warn('[Mux] Screen file missing; skipping mux and discarding system audio.')
+    await fsPromises.unlink(session.systemAudioPath).catch(() => {})
+    session.systemAudioPath = undefined
+    return
+  }
+
   // Validate inputs exist and have content. A zero-byte system-audio file
   // means the renderer never delivered chunks (e.g., permission denied) —
   // skip the mux and proceed with the original screen file.
@@ -712,6 +731,13 @@ async function cleanupAndSave(): Promise<void> {
     if (appState.ffmpegProcess) {
       const ffmpeg = appState.ffmpegProcess
       appState.ffmpegProcess = null
+      // Process may have already exited (e.g., avfoundation I/O error); if so,
+      // exitCode is set and the 'close' event will never fire again.
+      if (ffmpeg.exitCode !== null || ffmpeg.killed) {
+        log.info(`FFmpeg process already exited with code ${ffmpeg.exitCode}`)
+        resolve()
+        return
+      }
       ffmpeg.on('close', (code: any) => {
         log.info(`FFmpeg process exited with code ${code}`)
         resolve()

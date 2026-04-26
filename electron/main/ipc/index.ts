@@ -24,6 +24,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('desktop:get-cursor-scale', desktopHandlers.handleGetCursorScale)
   ipcMain.on('desktop:set-cursor-scale', desktopHandlers.handleSetCursorScale)
   ipcMain.handle('dialog:showSaveDialog', desktopHandlers.showSaveDialog)
+  ipcMain.handle('dialog:showMessageBox', desktopHandlers.showMessageBox)
+  ipcMain.handle('permission:check-screen-recording', desktopHandlers.checkScreenRecordingPermission)
   ipcMain.handle('video:get-frame', desktopHandlers.getVideoFrame)
 
   ipcMain.handle('desktop:get-cursor-themes', desktopHandlers.getCursorThemes)

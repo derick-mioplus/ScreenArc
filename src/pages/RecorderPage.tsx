@@ -222,8 +222,7 @@ export function RecorderPage() {
 
       // Set up system-audio capture *before* starting the recording so the TCC
       // permission prompt fires up-front rather than mid-recording. If it fails
-      // (denied, unsupported), we proceed without system audio rather than
-      // blocking the entire recording.
+      // (denied, unsupported), block the recording and tell the user.
       let systemAudioReady = false
       if (wantSystemAudio) {
         try {
@@ -232,8 +231,22 @@ export function RecorderPage() {
           })
           systemAudioReady = true
         } catch (err) {
-          console.error('[Recorder] Could not start system audio capture; proceeding without it.', err)
+          console.error('[Recorder] Could not start system audio capture:', err)
           systemAudioHandleRef.current = null
+          // Disable the toggle so it doesn't keep failing on retry
+          setSystemAudioEnabled(false)
+          window.electronAPI.setSetting('recorder.systemAudioEnabled', false)
+          setActionState('none')
+          setIsRecording(false)
+          window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: 'System Audio Permission Required',
+            message: 'ScreenArc could not access system audio.',
+            detail:
+              'Go to System Settings → Privacy & Security → Screen Recording (macOS 14.3 and earlier) or Microphone (macOS 14.4+) and enable the toggle next to "Electron". Then re-enable System audio in the recorder and try again.',
+            buttons: ['OK'],
+          })
+          return
         }
       }
 
@@ -434,8 +447,14 @@ export function RecorderPage() {
               {supportsSystemAudio && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     const next = !systemAudioEnabled
+                    if (next) {
+                      // Check permission before enabling; shows a dialog with
+                      // a link to System Settings if not granted.
+                      const status = await window.electronAPI.checkScreenRecordingPermission()
+                      if (status !== 'granted') return
+                    }
                     setSystemAudioEnabled(next)
                     window.electronAPI.setSetting('recorder.systemAudioEnabled', next)
                   }}

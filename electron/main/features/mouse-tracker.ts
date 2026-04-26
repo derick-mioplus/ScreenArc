@@ -417,7 +417,7 @@ export function createMouseTracker(): IMouseTracker | null {
 
     case 'darwin':
       if (!iohook) {
-        dialog.showErrorBox('Dependency Missing', 'Could not load the required module for mouse tracking on macOS.')
+        log.warn('[MouseTracker] iohook-macos not available — mouse tracking disabled (rebuild native modules to fix)')
         return null
       }
       return new MacOSMouseTracker()
