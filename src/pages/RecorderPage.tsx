@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { useDeviceManager } from '../hooks/useDeviceManager'
 import { cn } from '../lib/utils'
 import { startSystemAudioCapture, type SystemAudioCaptureHandle } from '../lib/system-audio'
+import { startScreenCapture, type ScreenCaptureHandle } from '../lib/screen-capture'
 import '../index.css'
 
 // --- Constants ---
@@ -56,9 +57,11 @@ export function RecorderPage() {
   const webcamPreviewRef = useRef<HTMLVideoElement>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
   const systemAudioHandleRef = useRef<SystemAudioCaptureHandle | null>(null)
+  const screenCaptureHandleRef = useRef<ScreenCaptureHandle | null>(null)
   const actionInProgressRef = useRef<ActionInProgress>('none')
 
   const supportsSystemAudio = platform === 'darwin'
+  const usesRendererScreenCapture = platform === 'darwin'
   const isBusy = actionInProgress !== 'none'
 
   const setActionState = useCallback((next: ActionInProgress) => {
@@ -72,18 +75,34 @@ export function RecorderPage() {
   useEffect(() => {
     const initialize = async () => {
       try {
-        const [savedWebcamId, savedMicId, savedSystemAudio, savedCursorScale, fetchedDisplays] = await Promise.all([
+        const [savedWebcamId, savedMicId, savedCursorScale, fetchedDisplays] = await Promise.all([
           window.electronAPI.getSetting<string>('recorder.selectedWebcamId'),
           window.electronAPI.getSetting<string>('recorder.selectedMicId'),
-          window.electronAPI.getSetting<boolean>('recorder.systemAudioEnabled'),
           window.electronAPI.getSetting<number>('recorder.cursorScale'),
           window.electronAPI.getDisplays(),
         ])
+        console.info('[Recorder] Loaded saved settings:', {
+          savedWebcamId,
+          savedMicId,
+          savedCursorScale,
+          displayCount: fetchedDisplays.length,
+        })
 
         setSelectedWebcamId(savedWebcamId || 'none')
         setSelectedMicId(savedMicId || 'none')
-        // Only honor a saved value when the platform supports system audio.
-        setSystemAudioEnabled(platform === 'darwin' && !!savedSystemAudio)
+
+        // System-audio capture is intentionally NOT persisted across sessions.
+        // It always starts OFF — the user opts in per session. This avoids the
+        // "I didn't know I was recording system audio" surprise and the stale
+        // state where a stored=true value sticks even after permission is
+        // revoked. We also clear any value left over from an earlier build of
+        // the app that did persist this flag.
+        setSystemAudioEnabled(false)
+        try {
+          await window.electronAPI.setSetting('recorder.systemAudioEnabled', false)
+        } catch (err) {
+          console.warn('[Recorder] Failed to clear legacy systemAudioEnabled setting:', err)
+        }
 
         // Only set cursor scale from settings for Linux
         if (platform === 'linux') {
@@ -96,7 +115,7 @@ export function RecorderPage() {
         const primary = fetchedDisplays.find((d) => d.isPrimary) || fetchedDisplays[0]
         if (primary) setSelectedDisplayId(String(primary.id))
       } catch (error) {
-        console.error('Failed to initialize recorder settings:', error)
+        console.error('[Recorder] Failed to initialize recorder settings:', error)
       }
     }
     initialize()
@@ -124,6 +143,7 @@ export function RecorderPage() {
     const handle = systemAudioHandleRef.current
     systemAudioHandleRef.current = null
     if (handle) {
+      console.info('[Recorder] Stopping system-audio capture handle.')
       try {
         await handle.stop()
       } catch (err) {
@@ -132,26 +152,45 @@ export function RecorderPage() {
     }
   }, [])
 
+  // Best-effort: stop the active screen capture, releasing the screen
+  // MediaStream and flushing the final video chunk.
+  const stopScreenCapture = useCallback(async () => {
+    const handle = screenCaptureHandleRef.current
+    screenCaptureHandleRef.current = null
+    if (handle) {
+      console.info('[Recorder] Stopping screen capture handle.')
+      try {
+        await handle.stop()
+      } catch (err) {
+        console.error('[Recorder] Failed to stop screen capture:', err)
+      }
+    }
+  }, [])
+
   // Effect to manage IPC listeners for recording completion
   useEffect(() => {
     const cleanupStarted = window.electronAPI.onRecordingStarted(() => {
+      console.info('[Recorder] recording-started received from main.')
       setIsRecording(true)
       setActionState('none')
     })
 
     const cleanupFinished = window.electronAPI.onRecordingFinished(() => {
+      console.info('[Recorder] recording-finished received from main.')
       setActionState('none')
       setRecordingState('idle')
       setIsRecording(false)
-      // Recording finished (or canceled) — release the MediaRecorder if it's
-      // still alive. Main process has already finalized the writer.
+      // Recording finished (or canceled) — release any MediaRecorders if
+      // they're still alive. Main process has already finalized the writers.
       void stopSystemAudio()
+      void stopScreenCapture()
       reloadDevices() // Refresh device list in case something changed
     })
 
-    // Main process tells us to stop the MediaRecorder before it finalizes the
-    // writer. We honor it eagerly so the tail chunk is flushed.
+    // Main process tells us to stop the system-audio MediaRecorder before it
+    // finalizes the writer. Honor it eagerly so the tail chunk is flushed.
     const cleanupStopSystemAudio = window.electronAPI.onStopSystemAudio?.(() => {
+      console.info('[Recorder] recorder:stop-system-audio received from main.')
       void (async () => {
         try {
           await stopSystemAudio()
@@ -165,12 +204,29 @@ export function RecorderPage() {
       })()
     })
 
+    // Same dance for the screen-capture MediaRecorder.
+    const cleanupStopScreenCapture = window.electronAPI.onStopScreenCapture?.(() => {
+      console.info('[Recorder] recorder:stop-screen-capture received from main.')
+      void (async () => {
+        try {
+          await stopScreenCapture()
+        } finally {
+          try {
+            await window.electronAPI.notifyScreenCaptureStopped()
+          } catch (error) {
+            console.error('[Recorder] Failed to acknowledge screen-capture stop to main process:', error)
+          }
+        }
+      })()
+    })
+
     return () => {
       cleanupStarted()
       cleanupFinished()
       cleanupStopSystemAudio?.()
+      cleanupStopScreenCapture?.()
     }
-  }, [reloadDevices, setActionState, stopSystemAudio])
+  }, [reloadDevices, setActionState, stopSystemAudio, stopScreenCapture])
 
   // Effect to manage the webcam preview stream
   useEffect(() => {
@@ -220,22 +276,89 @@ export function RecorderPage() {
       const mic = selectedMicId !== 'none' ? mics.find((d) => d.id === selectedMicId) : undefined
       const wantSystemAudio = systemAudioEnabled && supportsSystemAudio
 
+      console.info('[Recorder] handleStart called', {
+        source,
+        selectedDisplayId,
+        platform,
+        usesRendererScreenCapture,
+        wantSystemAudio,
+        hasMic: !!mic,
+        hasWebcam: !!webcam,
+      })
+
+      // On macOS we capture the screen in the renderer because FFmpeg's
+      // avfoundation screen input is broken on macOS 14+. The renderer's
+      // ScreenCaptureKit-backed MediaRecorder writes a single WebM with
+      // optional system audio folded in. Errors here are fatal — without a
+      // screen recording there's nothing to mux.
+      let systemAudioCarriedInScreenStream = false
+      if (usesRendererScreenCapture) {
+        try {
+          screenCaptureHandleRef.current = await startScreenCapture({
+            displayId: source === 'fullscreen' ? Number(selectedDisplayId) : undefined,
+            includeSystemAudio: wantSystemAudio,
+            onError: (err) => console.error('[Recorder] Screen capture failed mid-recording:', err),
+          })
+          systemAudioCarriedInScreenStream = screenCaptureHandleRef.current.hasSystemAudio()
+          console.info('[Recorder] Screen capture started.', {
+            hasSystemAudioInStream: systemAudioCarriedInScreenStream,
+          })
+        } catch (err) {
+          console.error('[Recorder] Could not start screen capture:', err)
+          screenCaptureHandleRef.current = null
+          setActionState('none')
+          setIsRecording(false)
+          window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: 'Screen Recording Permission Required',
+            message: 'ScreenArc could not access the screen.',
+            detail:
+              'Go to System Settings → Privacy & Security → Screen Recording, enable the toggle next to "Electron" (the dev build), then restart the app and try again.',
+            buttons: ['OK'],
+          })
+          return
+        }
+      }
+
       // Set up system-audio capture *before* starting the recording so the TCC
-      // permission prompt fires up-front rather than mid-recording. If it fails
-      // (denied, unsupported), we proceed without system audio rather than
-      // blocking the entire recording.
-      let systemAudioReady = false
-      if (wantSystemAudio) {
+      // permission prompt fires up-front rather than mid-recording. On macOS
+      // the screen capture above already grabbed system audio, so we skip the
+      // separate system-audio capture path.
+      let systemAudioReady = systemAudioCarriedInScreenStream
+      if (wantSystemAudio && !usesRendererScreenCapture) {
         try {
           systemAudioHandleRef.current = await startSystemAudioCapture({
             onError: (err) => console.error('[Recorder] System audio capture failed mid-recording:', err),
           })
           systemAudioReady = true
         } catch (err) {
-          console.error('[Recorder] Could not start system audio capture; proceeding without it.', err)
+          console.error('[Recorder] Could not start system audio capture:', err)
           systemAudioHandleRef.current = null
+          // Disable the toggle so it doesn't keep failing on retry
+          setSystemAudioEnabled(false)
+          window.electronAPI.setSetting('recorder.systemAudioEnabled', false)
+          await stopScreenCapture()
+          setActionState('none')
+          setIsRecording(false)
+          window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: 'System Audio Permission Required',
+            message: 'ScreenArc could not access system audio.',
+            detail:
+              'Go to System Settings → Privacy & Security → Screen Recording (macOS 14.3 and earlier) or Microphone (macOS 14.4+) and enable the toggle next to "Electron". Then re-enable System audio in the recorder and try again.',
+            buttons: ['OK'],
+          })
+          return
         }
       }
+
+      console.info('[Recorder] Calling main.startRecording with', {
+        source,
+        displayId: source === 'fullscreen' ? Number(selectedDisplayId) : undefined,
+        hasWebcam: !!webcam,
+        hasMic: !!mic,
+        systemAudio: systemAudioReady,
+      })
 
       const result = await window.electronAPI.startRecording({
         source,
@@ -246,15 +369,18 @@ export function RecorderPage() {
       })
 
       if (result.canceled) {
+        console.warn('[Recorder] main.startRecording returned canceled.')
         // If the user canceled (or main returned canceled), make sure we don't
-        // leak the system-audio MediaRecorder we already started.
+        // leak the MediaRecorders we already started.
         await stopSystemAudio()
+        await stopScreenCapture()
         setActionState('none')
         setIsRecording(false)
       }
     } catch (error) {
-      console.error('Failed to start recording:', error)
+      console.error('[Recorder] Failed to start recording:', error)
       await stopSystemAudio()
+      await stopScreenCapture()
       setActionState('none')
       setIsRecording(false)
     }
@@ -430,14 +556,28 @@ export function RecorderPage() {
                 </SelectContent>
               </Select>
 
-              {/* System Audio Toggle (macOS only) */}
+              {/* System Audio Toggle (macOS only) — session-local, not persisted. */}
               {supportsSystemAudio && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     const next = !systemAudioEnabled
+                    console.info(`[Recorder] System-audio toggle clicked. next=${next}`)
+                    if (next) {
+                      // Check permission before enabling. If not granted, the
+                      // main process pops a dialog with a link to System
+                      // Settings → Privacy & Security → Screen Recording, and
+                      // we leave the toggle off until the user retries.
+                      let status: 'granted' | 'denied' | 'not-determined' = 'denied'
+                      try {
+                        status = await window.electronAPI.checkScreenRecordingPermission()
+                      } catch (err) {
+                        console.error('[Recorder] checkScreenRecordingPermission threw:', err)
+                      }
+                      console.info(`[Recorder] Screen recording permission status: ${status}`)
+                      if (status !== 'granted') return
+                    }
                     setSystemAudioEnabled(next)
-                    window.electronAPI.setSetting('recorder.systemAudioEnabled', next)
                   }}
                   disabled={isRecording || isBusy}
                   aria-pressed={systemAudioEnabled}

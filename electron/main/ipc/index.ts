@@ -24,6 +24,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('desktop:get-cursor-scale', desktopHandlers.handleGetCursorScale)
   ipcMain.on('desktop:set-cursor-scale', desktopHandlers.handleSetCursorScale)
   ipcMain.handle('dialog:showSaveDialog', desktopHandlers.showSaveDialog)
+  ipcMain.handle('dialog:showMessageBox', desktopHandlers.showMessageBox)
+  ipcMain.handle('permission:check-screen-recording', desktopHandlers.checkScreenRecordingPermission)
   ipcMain.handle('video:get-frame', desktopHandlers.getVideoFrame)
 
   ipcMain.handle('desktop:get-cursor-themes', desktopHandlers.getCursorThemes)
@@ -36,6 +38,9 @@ export function registerIpcHandlers() {
   ipcMain.handle('recording:load-from-file', recordingHandlers.handleLoadVideoFromFile)
   ipcMain.handle('recording:write-system-audio', recordingHandlers.handleWriteSystemAudioChunk)
   ipcMain.handle('recording:system-audio-stopped', recordingHandlers.handleSystemAudioStopped)
+  ipcMain.handle('recording:write-screen-video', recordingHandlers.handleWriteScreenVideoChunk)
+  ipcMain.handle('recording:screen-capture-stopped', recordingHandlers.handleScreenCaptureStopped)
+  ipcMain.handle('recording:get-screen-sources', recordingHandlers.handleGetScreenSources)
 
   // Export
   ipcMain.handle('export:start', exportHandlers.handleStartExport)
