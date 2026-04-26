@@ -87,7 +87,6 @@
   },
   "optionalDependencies": {
     "global-mouse-events": "github:tamnguyenvan/global-mouse-events",
-    "iohook-macos": "github:tamnguyenvan/iohook-macos",
     "node-macos-cursor": "github:tamnguyenvan/node-macos-cursor",
     "node-win-cursor": "github:tamnguyenvan/node-win-cursor",
     "x11": "github:tamnguyenvan/node-x11"
@@ -110,7 +109,6 @@
     "asarUnpack": [
       "binaries/**",
       "node_modules/global-mouse-events/**/*",
-      "node_modules/iohook-macos/**/*",
       "node_modules/node-macos-cursor/**/*",
       "node_modules/node-win-cursor/**/*",
       "node_modules/x11/**/*"

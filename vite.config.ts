@@ -7,7 +7,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 // Native modules that need to be externalized for proper runtime loading
 // Fix for #137: global-mouse-events not loading on Windows
-const nativeModules = ['global-mouse-events', 'iohook-macos', 'node-macos-cursor', 'node-win-cursor', 'x11']
+const nativeModules = ['global-mouse-events', 'node-macos-cursor', 'node-win-cursor', 'x11']
 
 // https://vitejs.dev/config/
 export default defineConfig({
