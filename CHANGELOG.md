@@ -1,3 +1,17 @@
+# [1.4.0](https://github.com/tamnguyenvan/screenarc/compare/v1.3.0...v1.4.0) (2026-04-26)
+
+
+### Bug Fixes
+
+* **macos:** replace iohook-macos with Electron screen API polling ([ecbc747](https://github.com/tamnguyenvan/screenarc/commit/ecbc7476b2db1295cce230769fbe15372a107ee6))
+* **macos:** robustness and permission fixes for system audio ([c2524e0](https://github.com/tamnguyenvan/screenarc/commit/c2524e07e18a36c066108628816977e5ff9ad368))
+
+
+### Features
+
+* **macos:** renderer-side screen capture (ScreenCaptureKit) for macOS 15 ([2d7e719](https://github.com/tamnguyenvan/screenarc/commit/2d7e719d76d9be696dbf0691cd75105555a2e6ec))
+* **mux:** add buildMacMuxArgs for WebM → MP4 transcoding ([be5406d](https://github.com/tamnguyenvan/screenarc/commit/be5406db41362f09344647ba5a293c0c2126ca65))
+
 # [1.3.0](https://github.com/tamnguyenvan/screenarc/compare/v1.2.7...v1.3.0) (2026-04-26)
 
 
