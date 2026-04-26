@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   Microphone,
   MicrophoneOff,
@@ -12,11 +12,14 @@ import {
   Pointer,
   Folder,
   Square,
+  Volume,
+  VolumeOff,
 } from 'tabler-icons-react'
 import { Button } from '../components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { useDeviceManager } from '../hooks/useDeviceManager'
 import { cn } from '../lib/utils'
+import { startSystemAudioCapture, type SystemAudioCaptureHandle } from '../lib/system-audio'
 import '../index.css'
 
 // --- Constants ---
@@ -46,11 +49,15 @@ export function RecorderPage() {
   const [selectedDisplayId, setSelectedDisplayId] = useState<string>('')
   const [selectedWebcamId, setSelectedWebcamId] = useState<string>('none')
   const [selectedMicId, setSelectedMicId] = useState<string>('none')
+  const [systemAudioEnabled, setSystemAudioEnabled] = useState<boolean>(false)
   const [cursorScale, setCursorScale] = useState<number>(1)
 
   const { platform, webcams, mics, isInitializing, reload: reloadDevices } = useDeviceManager()
   const webcamPreviewRef = useRef<HTMLVideoElement>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
+  const systemAudioHandleRef = useRef<SystemAudioCaptureHandle | null>(null)
+
+  const supportsSystemAudio = platform === 'darwin'
 
   const cursorScales = useMemo(() => (platform === 'win32' ? WINDOWS_SCALES : LINUX_SCALES), [platform])
 
@@ -58,15 +65,18 @@ export function RecorderPage() {
   useEffect(() => {
     const initialize = async () => {
       try {
-        const [savedWebcamId, savedMicId, savedCursorScale, fetchedDisplays] = await Promise.all([
+        const [savedWebcamId, savedMicId, savedSystemAudio, savedCursorScale, fetchedDisplays] = await Promise.all([
           window.electronAPI.getSetting<string>('recorder.selectedWebcamId'),
           window.electronAPI.getSetting<string>('recorder.selectedMicId'),
+          window.electronAPI.getSetting<boolean>('recorder.systemAudioEnabled'),
           window.electronAPI.getSetting<number>('recorder.cursorScale'),
           window.electronAPI.getDisplays(),
         ])
 
         setSelectedWebcamId(savedWebcamId || 'none')
         setSelectedMicId(savedMicId || 'none')
+        // Only honor a saved value when the platform supports system audio.
+        setSystemAudioEnabled(platform === 'darwin' && !!savedSystemAudio)
 
         // Only set cursor scale from settings for Linux
         if (platform === 'linux') {
@@ -101,6 +111,20 @@ export function RecorderPage() {
     }
   }, [isInitializing, webcams, mics, platform, cursorScales, selectedWebcamId, selectedMicId, cursorScale])
 
+  // Best-effort: stop the active system-audio capture, releasing tracks
+  // and flushing the final MediaRecorder chunk.
+  const stopSystemAudio = useCallback(async () => {
+    const handle = systemAudioHandleRef.current
+    systemAudioHandleRef.current = null
+    if (handle) {
+      try {
+        await handle.stop()
+      } catch (err) {
+        console.error('[Recorder] Failed to stop system audio capture:', err)
+      }
+    }
+  }, [])
+
   // Effect to manage IPC listeners for recording completion
   useEffect(() => {
     const cleanupStarted = window.electronAPI.onRecordingStarted(() => {
@@ -112,13 +136,24 @@ export function RecorderPage() {
       setActionInProgress('none')
       setRecordingState('idle')
       setIsRecording(false)
+      // Recording finished (or canceled) — release the MediaRecorder if it's
+      // still alive. Main process has already finalized the writer.
+      void stopSystemAudio()
       reloadDevices() // Refresh device list in case something changed
     })
+
+    // Main process tells us to stop the MediaRecorder before it finalizes the
+    // writer. We honor it eagerly so the tail chunk is flushed.
+    const cleanupStopSystemAudio = window.electronAPI.onStopSystemAudio?.(() => {
+      void stopSystemAudio()
+    })
+
     return () => {
       cleanupStarted()
       cleanupFinished()
+      cleanupStopSystemAudio?.()
     }
-  }, [reloadDevices])
+  }, [reloadDevices, stopSystemAudio])
 
   // Effect to manage the webcam preview stream
   useEffect(() => {
@@ -164,20 +199,43 @@ export function RecorderPage() {
     try {
       const webcam = selectedWebcamId !== 'none' ? webcams.find((d) => d.id === selectedWebcamId) : undefined
       const mic = selectedMicId !== 'none' ? mics.find((d) => d.id === selectedMicId) : undefined
+      const wantSystemAudio = systemAudioEnabled && supportsSystemAudio
+
+      // Set up system-audio capture *before* starting the recording so the TCC
+      // permission prompt fires up-front rather than mid-recording. If it fails
+      // (denied, unsupported), we proceed without system audio rather than
+      // blocking the entire recording.
+      let systemAudioReady = false
+      if (wantSystemAudio) {
+        try {
+          systemAudioHandleRef.current = await startSystemAudioCapture({
+            onError: (err) => console.error('[Recorder] System audio capture failed mid-recording:', err),
+          })
+          systemAudioReady = true
+        } catch (err) {
+          console.error('[Recorder] Could not start system audio capture; proceeding without it.', err)
+          systemAudioHandleRef.current = null
+        }
+      }
 
       const result = await window.electronAPI.startRecording({
         source,
         displayId: source === 'fullscreen' ? Number(selectedDisplayId) : undefined,
         webcam: webcam ? { deviceId: webcam.id, deviceLabel: webcam.id, index: webcams.indexOf(webcam) } : undefined,
         mic: mic ? { deviceId: mic.id, deviceLabel: mic.id, index: mics.indexOf(mic) } : undefined,
+        systemAudio: systemAudioReady,
       })
 
       if (result.canceled) {
+        // If the user canceled (or main returned canceled), make sure we don't
+        // leak the system-audio MediaRecorder we already started.
+        await stopSystemAudio()
         setActionInProgress('none')
         setIsRecording(false)
       }
     } catch (error) {
       console.error('Failed to start recording:', error)
+      await stopSystemAudio()
       setActionInProgress('none')
       setIsRecording(false)
     }
@@ -348,6 +406,36 @@ export function RecorderPage() {
                   ))}
                 </SelectContent>
               </Select>
+
+              {/* System Audio Toggle (macOS only) */}
+              {supportsSystemAudio && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !systemAudioEnabled
+                    setSystemAudioEnabled(next)
+                    window.electronAPI.setSetting('recorder.systemAudioEnabled', next)
+                  }}
+                  disabled={isRecording}
+                  aria-pressed={systemAudioEnabled}
+                  aria-label={systemAudioEnabled ? 'Disable system audio recording' : 'Enable system audio recording'}
+                  title={
+                    systemAudioEnabled
+                      ? 'System audio: ON (recording desktop sound)'
+                      : 'System audio: OFF (click to enable)'
+                  }
+                  className={cn(
+                    'flex items-center gap-1.5 h-9 px-2.5 rounded-lg border text-xs transition-all',
+                    systemAudioEnabled
+                      ? 'bg-primary/10 border-primary/30 text-primary'
+                      : 'bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground hover:bg-background/50',
+                    isRecording && 'opacity-50 cursor-not-allowed',
+                  )}
+                >
+                  {systemAudioEnabled ? <Volume size={14} /> : <VolumeOff size={14} />}
+                  <span className="truncate">System audio</span>
+                </button>
+              )}
             </div>
 
             <div className="w-px h-8 bg-border/50"></div>

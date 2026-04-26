@@ -29,6 +29,10 @@ export function createRecorderWindow() {
     webPreferences: {
       nodeIntegration: true,
       preload: PRELOAD_SCRIPT,
+      // The recorder window is minimized while a recording is in progress.
+      // Without this, macOS throttles renderer JS and the system-audio
+      // MediaRecorder underruns, dropping audio chunks.
+      backgroundThrottling: false,
     },
   })
 

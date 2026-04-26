@@ -17,6 +17,11 @@ export interface RecordingSession {
   screenVideoPath: string
   metadataPath: string
   webcamVideoPath?: string
+  // Set when system-audio capture (renderer-side MediaRecorder) is enabled.
+  // Cleared after the post-recording mux merges it into the screen file.
+  systemAudioPath?: string
+  // True when mic capture is enabled for this session. Drives mux filter graph.
+  hasMicAudio?: boolean
   recordingGeometry: RecordingGeometry
 }
 

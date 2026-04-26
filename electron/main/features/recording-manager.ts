@@ -14,8 +14,18 @@ import { getCursorScale, restoreOriginalCursorScale, resetCursorScale } from './
 import { createEditorWindow, cleanupEditorFiles } from '../windows/editor-window'
 import { createSavingWindow, createSelectionWindow } from '../windows/temporary-windows'
 import type { RecordingSession, RecordingGeometry } from '../state'
+import { SystemAudioWriter } from './system-audio-writer'
+import { buildMuxArgs } from './build-mux-args'
 
 const FFMPEG_PATH = getFFmpegPath()
+
+// Module-scoped writer used by the renderer-streamed system-audio capture path.
+// Lives outside appState because it's a helper, not session data.
+const systemAudioWriter = new SystemAudioWriter()
+
+export function getSystemAudioWriter(): SystemAudioWriter {
+  return systemAudioWriter
+}
 
 /**
  * Uses ffprobe to get the precise creation time of the video file.
@@ -76,12 +86,14 @@ async function validateRecordingFiles(session: RecordingSession): Promise<boolea
  * @param inputArgs - Platform-specific FFmpeg input arguments.
  * @param hasWebcam - Flag indicating if webcam recording is enabled.
  * @param hasMic - Flag indicating if microphone recording is enabled.
+ * @param hasSystemAudio - Flag indicating if renderer-side system audio capture is enabled.
  * @param recordingGeometry - The logical dimensions and position of the recording area.
  */
 async function startActualRecording(
   inputArgs: string[],
   hasWebcam: boolean,
   hasMic: boolean,
+  hasSystemAudio: boolean,
   recordingGeometry: RecordingGeometry,
 ) {
   const recordingDir = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.screenarc')
@@ -90,10 +102,23 @@ async function startActualRecording(
 
   const screenVideoPath = path.join(recordingDir, `${baseName}-screen.mp4`)
   const webcamVideoPath = hasWebcam ? path.join(recordingDir, `${baseName}-webcam.mp4`) : undefined
+  const systemAudioPath = hasSystemAudio ? path.join(recordingDir, `${baseName}-system.webm`) : undefined
   const metadataPath = path.join(recordingDir, `${baseName}.json`)
 
   // Store recordingGeometry in the session
-  appState.currentRecordingSession = { screenVideoPath, webcamVideoPath, metadataPath, recordingGeometry }
+  appState.currentRecordingSession = {
+    screenVideoPath,
+    webcamVideoPath,
+    systemAudioPath,
+    hasMicAudio: hasMic,
+    metadataPath,
+    recordingGeometry,
+  }
+
+  if (systemAudioPath) {
+    systemAudioWriter.start(systemAudioPath)
+  }
+
   appState.recorderWin?.minimize()
 
   // Reset state for the new session
@@ -245,8 +270,13 @@ function createTray() {
  * @param options - The recording configuration selected by the user.
  */
 export async function startRecording(options: any) {
-  const { source, displayId, mic, webcam } = options
+  const { source, displayId, mic, webcam, systemAudio } = options
   log.info('[RecordingManager] Received start recording request with options:', options)
+
+  // System audio is currently only supported on macOS (uses ScreenCaptureKit /
+  // CoreAudio Tap via electron-audio-loopback). Silently drop the flag on
+  // other platforms so the rest of the flow stays the same.
+  const wantsSystemAudio = !!systemAudio && process.platform === 'darwin'
 
   // macOS Permissions Check
   if (process.platform === 'darwin') {
@@ -283,6 +313,15 @@ export async function startRecording(options: any) {
         )
         return { canceled: true }
       }
+    }
+
+    // 3. Heads-up for System Audio capture. The actual TCC prompt is fired by
+    // Chromium when the renderer calls getDisplayMedia. We can't pre-flight it
+    // here, but we can inform the user that a prompt will appear on first use.
+    // CoreAudio Tap permission (macOS 14.4+) is a separate prompt from Screen
+    // Recording — it requires NSAudioCaptureUsageDescription in Info.plist.
+    if (wantsSystemAudio) {
+      log.info('[RecordingManager] System audio capture requested — Chromium will prompt for permission on first getDisplayMedia.')
     }
   }
 
@@ -429,7 +468,7 @@ export async function startRecording(options: any) {
     appState.originalCursorScale = await getCursorScale()
   }
   log.info('[RecordingManager] Starting actual recording with args:', baseFfmpegArgs)
-  return startActualRecording(baseFfmpegArgs, !!webcam, !!mic, recordingGeometry)
+  return startActualRecording(baseFfmpegArgs, !!webcam, !!mic, wantsSystemAudio, recordingGeometry)
 }
 
 /**
@@ -442,9 +481,18 @@ export async function stopRecording() {
   appState.tray = null
   createSavingWindow()
 
+  // Tell the renderer to stop its MediaRecorder so any pending chunks land in
+  // the writer's queue. The recorder window flushes a final chunk on stop().
+  appState.recorderWin?.webContents.send('recorder:stop-system-audio')
+
   // Step 1: Wait for FFmpeg and tracker to finish
   await cleanupAndSave()
   log.info('FFmpeg process finished and file is finalized.')
+
+  // Step 1b: Flush and finalize the system-audio file (no-op when not used).
+  // This must come AFTER cleanupAndSave so any final chunks the renderer
+  // emitted in response to 'recorder:stop-system-audio' have time to arrive.
+  await systemAudioWriter.finalize()
 
   const session = appState.currentRecordingSession
   if (!session) {
@@ -459,6 +507,18 @@ export async function stopRecording() {
 
   // Step 2: Process and save metadata (after video file is complete)
   await processAndSaveMetadata(session)
+
+  // Step 2b: If we captured system audio, mux it into the screen file.
+  if (session.systemAudioPath) {
+    try {
+      await muxSystemAudio(session)
+    } catch (err) {
+      log.error('[StopRecord] Failed to mux system audio. Keeping original screen file.', err)
+      // Non-fatal: leave the original screen file intact and discard the system file.
+      await fsPromises.unlink(session.systemAudioPath).catch(() => {})
+      session.systemAudioPath = undefined
+    }
+  }
 
   // Step 3: Validate file
   const isValid = await validateRecordingFiles(session)
@@ -486,6 +546,61 @@ export async function stopRecording() {
     )
   }
   appState.recorderWin?.close()
+}
+
+/**
+ * Muxes the renderer-recorded system-audio WebM into the screen file. Replaces
+ * `session.screenVideoPath` in place; deletes the system-audio temp file.
+ */
+async function muxSystemAudio(session: RecordingSession): Promise<void> {
+  if (!session.systemAudioPath) return
+
+  // Validate inputs exist and have content. A zero-byte system-audio file
+  // means the renderer never delivered chunks (e.g., permission denied) —
+  // skip the mux and proceed with the original screen file.
+  try {
+    const sysStat = await fsPromises.stat(session.systemAudioPath)
+    if (sysStat.size === 0) {
+      log.warn('[Mux] System audio file is empty; skipping mux.')
+      await fsPromises.unlink(session.systemAudioPath).catch(() => {})
+      session.systemAudioPath = undefined
+      return
+    }
+  } catch (err) {
+    log.warn('[Mux] System audio file missing; skipping mux.', err)
+    session.systemAudioPath = undefined
+    return
+  }
+
+  const tempOutput = session.screenVideoPath.replace(/\.mp4$/, '.muxed.mp4')
+  const args = buildMuxArgs({
+    screenInput: session.screenVideoPath,
+    systemAudioInput: session.systemAudioPath,
+    output: tempOutput,
+    hasMicAudio: !!session.hasMicAudio,
+  })
+
+  log.info(`[Mux] Running ffmpeg ${args.join(' ')}`)
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(FFMPEG_PATH, args)
+    let stderr = ''
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString()
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`ffmpeg mux exited ${code}: ${stderr.slice(-500)}`))
+    })
+  })
+
+  // Atomic-ish swap: rename muxed → screen, drop the original screen by virtue
+  // of the rename overwriting it. Then drop the system-audio temp file.
+  await fsPromises.rename(tempOutput, session.screenVideoPath)
+  await fsPromises.unlink(session.systemAudioPath).catch(() => {})
+  session.systemAudioPath = undefined
+  log.info('[Mux] System audio successfully muxed into screen file.')
 }
 
 /**
@@ -584,6 +699,11 @@ export async function cleanupAndDiscard() {
   appState.ffmpegProcess?.kill('SIGKILL')
   appState.ffmpegProcess = null
 
+  // Tell the renderer to stop its MediaRecorder; even if it ignores us,
+  // aborting the writer means subsequent IPC chunks are no-ops.
+  appState.recorderWin?.webContents.send('recorder:stop-system-audio')
+  await systemAudioWriter.abort()
+
   appState.mouseTracker?.stop()
   appState.mouseTracker = null
 
@@ -597,6 +717,9 @@ export async function cleanupAndDiscard() {
   // Asynchronously delete files to not block the UI
   setTimeout(async () => {
     await cleanupEditorFiles(sessionToDiscard)
+    if (sessionToDiscard.systemAudioPath) {
+      await fsPromises.unlink(sessionToDiscard.systemAudioPath).catch(() => {})
+    }
   }, 200)
 }
 
@@ -618,7 +741,7 @@ export async function cleanupOrphanedRecordings() {
 
   try {
     const allFiles = await fsPromises.readdir(recordingDir)
-    const filePattern = /^ScreenArc-recording-\d+(-screen\.mp4|-webcam\.mp4|\.json)$/
+    const filePattern = /^ScreenArc-recording-\d+(-screen\.mp4|-screen\.muxed\.mp4|-webcam\.mp4|-system\.webm|\.json)$/
     const filesToDelete = allFiles
       .filter((file) => filePattern.test(file))
       .map((file) => path.join(recordingDir, file))

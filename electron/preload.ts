@@ -83,11 +83,27 @@ export const electronAPI = {
     displayId?: number
     webcam?: { deviceId: string; deviceLabel: string; index: number }
     mic?: { deviceId: string; deviceLabel: string; index: number }
+    systemAudio?: boolean
   }): Promise<RecordingResult> => ipcRenderer.invoke('recording:start', options),
   stopRecording: (): void => ipcRenderer.send('recording:stop'),
   loadVideoFromFile: (): Promise<RecordingResult> => ipcRenderer.invoke('recording:load-from-file'),
   getCursorScale: (): Promise<number> => ipcRenderer.invoke('desktop:get-cursor-scale'),
   setCursorScale: (scale: number): void => ipcRenderer.send('desktop:set-cursor-scale', scale),
+
+  // --- System Audio Loopback (macOS) ---
+  // electron-audio-loopback registers `enable-loopback-audio` and
+  // `disable-loopback-audio` IPC handlers in initMain(). Wrap each
+  // getDisplayMedia call between enable/disable so Chromium returns a
+  // system-audio track instead of microphone audio.
+  enableLoopbackAudio: (): Promise<void> => ipcRenderer.invoke('enable-loopback-audio'),
+  disableLoopbackAudio: (): Promise<void> => ipcRenderer.invoke('disable-loopback-audio'),
+  writeSystemAudioChunk: (chunk: ArrayBuffer): Promise<number> =>
+    ipcRenderer.invoke('recording:write-system-audio', chunk),
+  onStopSystemAudio: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('recorder:stop-system-audio', listener)
+    return () => ipcRenderer.removeListener('recorder:stop-system-audio', listener)
+  },
 
   getDisplays: (): Promise<DisplayInfo[]> => ipcRenderer.invoke('desktop:get-displays'),
   getDshowDevices: (): Promise<{ video: DshowDevice[]; audio: DshowDevice[] }> =>

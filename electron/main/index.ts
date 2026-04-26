@@ -1,6 +1,7 @@
 // Entry point of the Electron application.
 
 import { app, BrowserWindow, protocol, ProtocolRequest, ProtocolResponse, Menu, screen, dialog } from 'electron'
+import { initMain as initAudioLoopback } from 'electron-audio-loopback'
 import log from 'electron-log/main'
 import path from 'node:path'
 import fsSync from 'node:fs'
@@ -14,6 +15,12 @@ import { appState } from './state'
 
 // --- Initialization ---
 setupLogging()
+
+// Enable system audio loopback capture on macOS (12.3+ via ScreenCaptureKit,
+// 14.4+ via CoreAudio Taps with `forceCoreAudioTap: true`). Must run before
+// `app.whenReady()` because it appends Chromium feature flags.
+// See: https://github.com/alectrocute/electron-audio-loopback
+initAudioLoopback({ forceCoreAudioTap: true })
 
 // --- App Lifecycle Events ---
 app.on('window-all-closed', () => {
