@@ -7,6 +7,7 @@
 // Opus encoder (lower CPU and no extra resampling).
 
 const CHUNK_INTERVAL_MS = 1000
+let loopbackCaptureLock: Promise<void> = Promise.resolve()
 
 export interface SystemAudioCaptureHandle {
   stop: () => Promise<void>
@@ -32,16 +33,27 @@ export interface StartOptions {
  */
 export async function startSystemAudioCapture(opts: StartOptions = {}): Promise<SystemAudioCaptureHandle> {
   const api = window.electronAPI
-
-  // Toggle the loopback flag so the next getDisplayMedia() returns a
-  // system-audio track. We disable the flag immediately after the call so
-  // unrelated screen-share requests later don't accidentally pick it up.
-  await api.enableLoopbackAudio()
   let stream: MediaStream
+  let releaseLoopbackLock!: () => void
+  const priorLoopbackLock = loopbackCaptureLock
+  loopbackCaptureLock = new Promise<void>((resolve) => {
+    releaseLoopbackLock = resolve
+  })
+
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+    await priorLoopbackLock
+
+    // Toggle the loopback flag so the next getDisplayMedia() returns a
+    // system-audio track. We disable the flag immediately after the call so
+    // unrelated screen-share requests later don't accidentally pick it up.
+    await api.enableLoopbackAudio()
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+    } finally {
+      await api.disableLoopbackAudio()
+    }
   } finally {
-    await api.disableLoopbackAudio()
+    releaseLoopbackLock()
   }
 
   // We only want audio; drop video tracks immediately.
@@ -71,16 +83,26 @@ export async function startSystemAudioCapture(opts: StartOptions = {}): Promise<
   }
 
   let active = true
+  const pendingChunkWrites = new Set<Promise<void>>()
 
   recorder.ondataavailable = async (event: BlobEvent) => {
     if (!event.data || event.data.size === 0) return
+    const writeTask = (async () => {
+      try {
+        const buf = await event.data.arrayBuffer()
+        await api.writeSystemAudioChunk(buf)
+      } catch (err) {
+        console.error('[SystemAudio] Failed to forward chunk:', err)
+        // We don't kill the capture on transient IPC failures; the writer
+        // serializes chunks and surfaces hard errors at finalize time.
+      }
+    })()
+
+    pendingChunkWrites.add(writeTask)
     try {
-      const buf = await event.data.arrayBuffer()
-      await api.writeSystemAudioChunk(buf)
-    } catch (err) {
-      console.error('[SystemAudio] Failed to forward chunk:', err)
-      // We don't kill the capture on transient IPC failures; the writer
-      // serializes chunks and surfaces hard errors at finalize time.
+      await writeTask
+    } finally {
+      pendingChunkWrites.delete(writeTask)
     }
   }
 
@@ -129,6 +151,8 @@ export async function startSystemAudioCapture(opts: StartOptions = {}): Promise<
         // ignore
       }
     })
+
+    await Promise.allSettled(Array.from(pendingChunkWrites))
   }
 
   return {

@@ -99,6 +99,7 @@ export const electronAPI = {
   disableLoopbackAudio: (): Promise<void> => ipcRenderer.invoke('disable-loopback-audio'),
   writeSystemAudioChunk: (chunk: ArrayBuffer): Promise<number> =>
     ipcRenderer.invoke('recording:write-system-audio', chunk),
+  notifySystemAudioStopped: (): Promise<void> => ipcRenderer.invoke('recording:system-audio-stopped'),
   onStopSystemAudio: (callback: () => void) => {
     const listener = () => callback()
     ipcRenderer.on('recorder:stop-system-audio', listener)

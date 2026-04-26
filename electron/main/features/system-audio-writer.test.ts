@@ -11,7 +11,8 @@ beforeEach(() => {
   scratchDir = mkdtempSync(path.join(tmpdir(), 'screenarc-saw-'))
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
   rmSync(scratchDir, { recursive: true, force: true })
 })
 
@@ -125,5 +126,25 @@ describe('SystemAudioWriter', () => {
     await writer.finalize()
 
     expect(Array.from(readFileSync(nested))).toEqual([7])
+  })
+
+  test('finalize() rejects after a stream error instead of silently succeeding', async () => {
+    const writer = new SystemAudioWriter()
+    writer.start(filePath())
+
+    ;(writer as unknown as { failure: Error }).failure = new Error('disk full')
+
+    await expect(writer.finalize()).rejects.toThrow('disk full')
+    await expect(writer.write(Buffer.from([1]))).rejects.toThrow('disk full')
+    await writer.abort()
+  })
+
+  test('start() rejects when a previous session is still active', async () => {
+    const writer = new SystemAudioWriter()
+    writer.start(filePath())
+
+    expect(() => writer.start(path.join(scratchDir, 'other.webm'))).toThrow('still active')
+
+    await writer.abort()
   })
 })

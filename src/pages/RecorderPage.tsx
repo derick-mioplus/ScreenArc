@@ -56,8 +56,15 @@ export function RecorderPage() {
   const webcamPreviewRef = useRef<HTMLVideoElement>(null)
   const webcamStreamRef = useRef<MediaStream | null>(null)
   const systemAudioHandleRef = useRef<SystemAudioCaptureHandle | null>(null)
+  const actionInProgressRef = useRef<ActionInProgress>('none')
 
   const supportsSystemAudio = platform === 'darwin'
+  const isBusy = actionInProgress !== 'none'
+
+  const setActionState = useCallback((next: ActionInProgress) => {
+    actionInProgressRef.current = next
+    setActionInProgress(next)
+  }, [])
 
   const cursorScales = useMemo(() => (platform === 'win32' ? WINDOWS_SCALES : LINUX_SCALES), [platform])
 
@@ -129,11 +136,11 @@ export function RecorderPage() {
   useEffect(() => {
     const cleanupStarted = window.electronAPI.onRecordingStarted(() => {
       setIsRecording(true)
-      setActionInProgress('none')
+      setActionState('none')
     })
 
     const cleanupFinished = window.electronAPI.onRecordingFinished(() => {
-      setActionInProgress('none')
+      setActionState('none')
       setRecordingState('idle')
       setIsRecording(false)
       // Recording finished (or canceled) — release the MediaRecorder if it's
@@ -145,7 +152,17 @@ export function RecorderPage() {
     // Main process tells us to stop the MediaRecorder before it finalizes the
     // writer. We honor it eagerly so the tail chunk is flushed.
     const cleanupStopSystemAudio = window.electronAPI.onStopSystemAudio?.(() => {
-      void stopSystemAudio()
+      void (async () => {
+        try {
+          await stopSystemAudio()
+        } finally {
+          try {
+            await window.electronAPI.notifySystemAudioStopped()
+          } catch (error) {
+            console.error('[Recorder] Failed to acknowledge system-audio stop to main process:', error)
+          }
+        }
+      })()
     })
 
     return () => {
@@ -153,7 +170,7 @@ export function RecorderPage() {
       cleanupFinished()
       cleanupStopSystemAudio?.()
     }
-  }, [reloadDevices, stopSystemAudio])
+  }, [reloadDevices, setActionState, stopSystemAudio])
 
   // Effect to manage the webcam preview stream
   useEffect(() => {
@@ -188,7 +205,9 @@ export function RecorderPage() {
   }, [selectedWebcamId, platform, recordingState])
 
   const handleStart = async () => {
-    setActionInProgress('recording')
+    if (isRecording || actionInProgressRef.current !== 'none') return
+
+    setActionState('recording')
     if (webcamStreamRef.current) {
       webcamStreamRef.current.getTracks().forEach((track) => track.stop())
       webcamStreamRef.current = null
@@ -230,30 +249,34 @@ export function RecorderPage() {
         // If the user canceled (or main returned canceled), make sure we don't
         // leak the system-audio MediaRecorder we already started.
         await stopSystemAudio()
-        setActionInProgress('none')
+        setActionState('none')
         setIsRecording(false)
       }
     } catch (error) {
       console.error('Failed to start recording:', error)
       await stopSystemAudio()
-      setActionInProgress('none')
+      setActionState('none')
       setIsRecording(false)
     }
   }
 
   const handleStop = () => {
-    setActionInProgress('recording')
+    if (!isRecording || actionInProgressRef.current !== 'none') return
+
+    setActionState('recording')
     window.electronAPI.stopRecording()
   }
 
   const handleLoadVideo = async () => {
-    setActionInProgress('loading')
+    if (isRecording || actionInProgressRef.current !== 'none') return
+
+    setActionState('loading')
     try {
       const result = await window.electronAPI.loadVideoFromFile()
-      if (result.canceled) setActionInProgress('none')
+      if (result.canceled) setActionState('none')
     } catch (error) {
       console.error('Failed to load video from file:', error)
-      setActionInProgress('none')
+      setActionState('none')
     }
   }
 
@@ -283,7 +306,7 @@ export function RecorderPage() {
               style={{ WebkitAppRegion: 'no-drag' }}
               className="absolute -top-2.5 -left-2.5 z-20 flex items-center justify-center w-6 h-6 rounded-full bg-destructive/90 hover:bg-destructive text-white shadow-lg transition-all hover:scale-110"
               aria-label="Close Recorder"
-              disabled={isRecording}
+              disabled={isRecording || isBusy}
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -298,14 +321,14 @@ export function RecorderPage() {
                 isActive={source === 'fullscreen'}
                 onClick={() => setSource('fullscreen')}
                 tooltip="Full Screen"
-                disabled={isRecording}
+                disabled={isRecording || isBusy}
               />
               <SourceButton
                 icon={<Marquee2 size={16} />}
                 isActive={source === 'area'}
                 onClick={() => setSource('area')}
                 tooltip="Area"
-                disabled={isRecording}
+                disabled={isRecording || isBusy}
               />
             </div>
 
@@ -316,7 +339,7 @@ export function RecorderPage() {
               <Select
                 value={selectedDisplayId}
                 onValueChange={setSelectedDisplayId}
-                disabled={source !== 'fullscreen' || isRecording}
+                disabled={source !== 'fullscreen' || isRecording || isBusy}
               >
                 <SelectTrigger
                   variant="minimal"
@@ -344,7 +367,7 @@ export function RecorderPage() {
               <Select
                 value={selectedWebcamId}
                 onValueChange={handleSelectionChange(setSelectedWebcamId, 'recorder.selectedWebcamId')}
-                disabled={isRecording}
+                disabled={isRecording || isBusy}
               >
                 <SelectTrigger
                   variant="minimal"
@@ -377,7 +400,7 @@ export function RecorderPage() {
               <Select
                 value={selectedMicId}
                 onValueChange={handleSelectionChange(setSelectedMicId, 'recorder.selectedMicId')}
-                disabled={isRecording}
+                disabled={isRecording || isBusy}
               >
                 <SelectTrigger
                   variant="minimal"
@@ -416,7 +439,7 @@ export function RecorderPage() {
                     setSystemAudioEnabled(next)
                     window.electronAPI.setSetting('recorder.systemAudioEnabled', next)
                   }}
-                  disabled={isRecording}
+                  disabled={isRecording || isBusy}
                   aria-pressed={systemAudioEnabled}
                   aria-label={systemAudioEnabled ? 'Disable system audio recording' : 'Enable system audio recording'}
                   title={
@@ -429,7 +452,7 @@ export function RecorderPage() {
                     systemAudioEnabled
                       ? 'bg-primary/10 border-primary/30 text-primary'
                       : 'bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground hover:bg-background/50',
-                    isRecording && 'opacity-50 cursor-not-allowed',
+                    (isRecording || isBusy) && 'opacity-50 cursor-not-allowed',
                   )}
                 >
                   {systemAudioEnabled ? <Volume size={14} /> : <VolumeOff size={14} />}
@@ -445,7 +468,7 @@ export function RecorderPage() {
               <>
                 <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: 'no-drag' }}>
                   <Pointer size={14} className="text-muted-foreground/60" />
-                  <Select value={String(cursorScale)} onValueChange={handleCursorScaleChange} disabled={isRecording}>
+                  <Select value={String(cursorScale)} onValueChange={handleCursorScaleChange} disabled={isRecording || isBusy}>
                     <SelectTrigger variant="minimal" className="w-[56px] h-9 text-xs" aria-label="Select cursor scale">
                       <SelectValue />
                     </SelectTrigger>
@@ -479,7 +502,7 @@ export function RecorderPage() {
                   <Button
                     onClick={handleStart}
                     title="Record"
-                    disabled={isInitializing || actionInProgress !== 'none'}
+                    disabled={isInitializing || isBusy}
                     size="icon"
                     className="h-10 w-10 rounded-full shadow-lg"
                   >
@@ -489,7 +512,7 @@ export function RecorderPage() {
                 <Button
                   onClick={handleLoadVideo}
                   title="Load from video"
-                  disabled={isInitializing || actionInProgress !== 'none' || isRecording}
+                  disabled={isInitializing || isBusy || isRecording}
                   variant="secondary"
                   size="icon"
                   className="h-10 w-10 rounded-full shadow-lg"

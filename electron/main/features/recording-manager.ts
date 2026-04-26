@@ -18,13 +18,58 @@ import { SystemAudioWriter } from './system-audio-writer'
 import { buildMuxArgs } from './build-mux-args'
 
 const FFMPEG_PATH = getFFmpegPath()
+const SYSTEM_AUDIO_STOP_TIMEOUT_MS = 5000
 
 // Module-scoped writer used by the renderer-streamed system-audio capture path.
 // Lives outside appState because it's a helper, not session data.
 const systemAudioWriter = new SystemAudioWriter()
+let pendingSystemAudioStop:
+  | {
+      promise: Promise<void>
+      resolve: () => void
+    }
+  | null = null
 
 export function getSystemAudioWriter(): SystemAudioWriter {
   return systemAudioWriter
+}
+
+export function markSystemAudioStopped(): void {
+  pendingSystemAudioStop?.resolve()
+  pendingSystemAudioStop = null
+}
+
+function createSystemAudioStopWaiter(): Promise<void> {
+  if (!pendingSystemAudioStop) {
+    let resolve!: () => void
+    pendingSystemAudioStop = {
+      promise: new Promise<void>((res) => {
+        resolve = res
+      }),
+      resolve,
+    }
+  }
+
+  return pendingSystemAudioStop.promise
+}
+
+async function waitForSystemAudioStop(waiter: Promise<void>): Promise<void> {
+  let didAcknowledge = false
+  try {
+    await Promise.race([
+      waiter.then(() => {
+        didAcknowledge = true
+      }),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SYSTEM_AUDIO_STOP_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (!didAcknowledge) {
+      log.warn('[SystemAudio] Renderer did not acknowledge stop before timeout; finalizing writer anyway.')
+    }
+    pendingSystemAudioStop = null
+  }
 }
 
 /**
@@ -40,6 +85,31 @@ async function getVideoStartTime(videoPath: string): Promise<number> {
     log.error(`[getVideoStartTime] Error getting file stats for ${videoPath}:`, error)
     throw error
   }
+}
+
+async function screenFileHasAudioStream(screenVideoPath: string): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const proc = spawn(FFMPEG_PATH, ['-v', 'error', '-i', screenVideoPath, '-map', '0:a:0', '-f', 'null', '-'])
+    let stderr = ''
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve(true)
+        return
+      }
+
+      if (stderr.includes('matches no streams')) {
+        resolve(false)
+        return
+      }
+
+      reject(new Error(`Failed to inspect screen audio stream: ${stderr.slice(-500)}`))
+    })
+  })
 }
 
 /**
@@ -116,6 +186,7 @@ async function startActualRecording(
   }
 
   if (systemAudioPath) {
+    markSystemAudioStopped()
     systemAudioWriter.start(systemAudioPath)
   }
 
@@ -481,21 +552,28 @@ export async function stopRecording() {
   appState.tray = null
   createSavingWindow()
 
+  const session = appState.currentRecordingSession
+  const waitForRendererSystemAudioStop = session?.systemAudioPath ? createSystemAudioStopWaiter() : null
+
   // Tell the renderer to stop its MediaRecorder so any pending chunks land in
   // the writer's queue. The recorder window flushes a final chunk on stop().
-  appState.recorderWin?.webContents.send('recorder:stop-system-audio')
+  if (waitForRendererSystemAudioStop) {
+    appState.recorderWin?.webContents.send('recorder:stop-system-audio')
+  }
 
   // Step 1: Wait for FFmpeg and tracker to finish
   await cleanupAndSave()
   log.info('FFmpeg process finished and file is finalized.')
 
-  // Step 1b: Flush and finalize the system-audio file (no-op when not used).
-  // This must come AFTER cleanupAndSave so any final chunks the renderer
-  // emitted in response to 'recorder:stop-system-audio' have time to arrive.
+  // Step 1b: Wait for the renderer to finish forwarding the tail chunk, then
+  // flush and finalize the system-audio file (no-op when not used).
+  if (waitForRendererSystemAudioStop) {
+    await waitForSystemAudioStop(waitForRendererSystemAudioStop)
+  }
   await systemAudioWriter.finalize()
 
-  const session = appState.currentRecordingSession
-  if (!session) {
+  const finalizedSession = appState.currentRecordingSession
+  if (!finalizedSession) {
     log.error('[StopRecord] No recording session found after cleanup. Aborting.')
     appState.savingWin?.close()
     appState.recorderWin?.show()
@@ -503,28 +581,28 @@ export async function stopRecording() {
   }
 
   // Notify recorder window that the recording has finished, allowing it to reset its UI
-  appState.recorderWin?.webContents.send('recording-finished', { canceled: false, ...session })
+  appState.recorderWin?.webContents.send('recording-finished', { canceled: false, ...finalizedSession })
 
   // Step 2: Process and save metadata (after video file is complete)
-  await processAndSaveMetadata(session)
+  await processAndSaveMetadata(finalizedSession)
 
   // Step 2b: If we captured system audio, mux it into the screen file.
-  if (session.systemAudioPath) {
+  if (finalizedSession.systemAudioPath) {
     try {
-      await muxSystemAudio(session)
+      await muxSystemAudio(finalizedSession)
     } catch (err) {
       log.error('[StopRecord] Failed to mux system audio. Keeping original screen file.', err)
       // Non-fatal: leave the original screen file intact and discard the system file.
-      await fsPromises.unlink(session.systemAudioPath).catch(() => {})
-      session.systemAudioPath = undefined
+      await fsPromises.unlink(finalizedSession.systemAudioPath).catch(() => {})
+      finalizedSession.systemAudioPath = undefined
     }
   }
 
   // Step 3: Validate file
-  const isValid = await validateRecordingFiles(session)
+  const isValid = await validateRecordingFiles(finalizedSession)
   if (!isValid) {
     log.error('[StopRecord] Recording validation failed. Discarding files.')
-    await cleanupEditorFiles(session)
+    await cleanupEditorFiles(finalizedSession)
     appState.currentRecordingSession = null
     appState.savingWin?.close()
     resetCursorScale()
@@ -537,12 +615,12 @@ export async function stopRecording() {
   resetCursorScale()
 
   appState.currentRecordingSession = null
-  if (session) {
+  if (finalizedSession) {
     createEditorWindow(
-      session.screenVideoPath,
-      session.metadataPath,
-      session.recordingGeometry,
-      session.webcamVideoPath,
+      finalizedSession.screenVideoPath,
+      finalizedSession.metadataPath,
+      finalizedSession.recordingGeometry,
+      finalizedSession.webcamVideoPath,
     )
   }
   appState.recorderWin?.close()
@@ -572,33 +650,41 @@ async function muxSystemAudio(session: RecordingSession): Promise<void> {
     return
   }
 
+  const screenHasAudio = session.hasMicAudio ? await screenFileHasAudioStream(session.screenVideoPath) : false
   const tempOutput = session.screenVideoPath.replace(/\.mp4$/, '.muxed.mp4')
   const args = buildMuxArgs({
     screenInput: session.screenVideoPath,
     systemAudioInput: session.systemAudioPath,
     output: tempOutput,
-    hasMicAudio: !!session.hasMicAudio,
+    hasMicAudio: screenHasAudio,
   })
 
   log.info(`[Mux] Running ffmpeg ${args.join(' ')}`)
 
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(FFMPEG_PATH, args)
-    let stderr = ''
-    proc.stderr.on('data', (d) => {
-      stderr += d.toString()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(FFMPEG_PATH, args)
+      let stderr = ''
+      proc.stderr.on('data', (d) => {
+        stderr += d.toString()
+      })
+      proc.on('error', reject)
+      proc.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`ffmpeg mux exited ${code}: ${stderr.slice(-500)}`))
+      })
     })
-    proc.on('error', reject)
-    proc.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`ffmpeg mux exited ${code}: ${stderr.slice(-500)}`))
-    })
-  })
+  } catch (error) {
+    await fsPromises.unlink(tempOutput).catch(() => {})
+    throw error
+  }
 
   // Atomic-ish swap: rename muxed → screen, drop the original screen by virtue
   // of the rename overwriting it. Then drop the system-audio temp file.
   await fsPromises.rename(tempOutput, session.screenVideoPath)
-  await fsPromises.unlink(session.systemAudioPath).catch(() => {})
+  await fsPromises.unlink(session.systemAudioPath).catch((error) => {
+    log.warn('[Mux] Failed to delete temporary system audio file after mux.', error)
+  })
   session.systemAudioPath = undefined
   log.info('[Mux] System audio successfully muxed into screen file.')
 }
@@ -693,6 +779,7 @@ async function processAndSaveMetadata(session: RecordingSession): Promise<boolea
 export async function cleanupAndDiscard() {
   if (!appState.currentRecordingSession) return
   log.warn('[Cleanup] Discarding current recording session.')
+  markSystemAudioStopped()
   const sessionToDiscard = { ...appState.currentRecordingSession }
   appState.currentRecordingSession = null
 

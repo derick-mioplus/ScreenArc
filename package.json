@@ -122,13 +122,15 @@
       "artifactName": "${productName} Setup ${version}.${ext}"
     },
     "mac": {
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "mergeASARs": false,
       "x64ArchFiles": "*",
       "minimumSystemVersion": "12.3.0",
       "category": "public.app-category.video",
       "type": null,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
       "extendInfo": {
         "NSAudioCaptureUsageDescription": "ScreenArc captures system audio so you can include it in your screen recordings.",
         "NSMicrophoneUsageDescription": "ScreenArc records from the microphone when you enable it during a recording."

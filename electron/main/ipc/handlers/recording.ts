@@ -1,6 +1,12 @@
 // Handlers for recording-related IPC (recording).
 
-import { startRecording, loadVideoFromFile, stopRecording, getSystemAudioWriter } from '../../features/recording-manager'
+import {
+  startRecording,
+  loadVideoFromFile,
+  stopRecording,
+  getSystemAudioWriter,
+  markSystemAudioStopped,
+} from '../../features/recording-manager'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function handleStartRecording(_event: any, options: any) {
@@ -25,4 +31,8 @@ export async function handleWriteSystemAudioChunk(_event: unknown, chunk: ArrayB
     throw new Error('writeSystemAudioChunk: payload must be an ArrayBuffer')
   }
   return getSystemAudioWriter().write(Buffer.from(chunk))
+}
+
+export function handleSystemAudioStopped(): void {
+  markSystemAudioStopped()
 }
