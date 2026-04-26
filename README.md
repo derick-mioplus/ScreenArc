@@ -208,7 +208,6 @@ A huge thank you to everyone who has contributed to making ScreenArc better!
 ScreenArc stands on the shoulders of giants. This project would not be possible without the incredible work of the open-source community. A special thank you to the authors and maintainers of these key libraries & tools that handle low-level system interactions:
 
 - [global-mouse-events](https://github.com/xanderfrangos/global-mouse-events): Mouse event listener on Windows
-- [iohook-macos](https://github.com/hwanyong/iohook-macos): Mouse event listener on macOS
 - [node-x11](https://github.com/sidorares/node-x11): X11 Node.js binding
 - [Cursorful](https://cursorful.com/): I borrowed the Timeline design idea from them.
 

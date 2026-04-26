@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import log from 'electron-log/main'
 import { EventEmitter } from 'node:events'
-import { dialog } from 'electron'
+import { dialog, screen } from 'electron'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import { MOUSE_RECORDING_FPS } from '../lib/constants'
@@ -28,7 +28,6 @@ const ANIMATED_CURSORS = {
 // --- Dynamic Imports for Platform-Specific Modules ---
 let X11Module: any
 let mouseEvents: any
-let iohook: any
 
 export function initializeMouseTrackerDependencies() {
   if (process.platform === 'linux') {
@@ -54,13 +53,14 @@ export function initializeMouseTrackerDependencies() {
   }
 
   if (process.platform === 'darwin') {
-    try {
-      iohook = require('iohook-macos')
-      macosCursorManager.initializeMacOSCursorManager()
-      log.info('[MouseTracker] Successfully loaded iohook-macos and initialized macos-cursor-manager for macOS.')
-    } catch (e) {
-      log.error('[MouseTracker] Failed to load macOS-specific modules. Mouse tracking on macOS will be disabled.', e)
-    }
+    // macOS uses Electron's built-in `screen.getCursorScreenPoint()` polled
+    // at MOUSE_RECORDING_FPS — no native module dependency, no Accessibility
+    // permission prompt, and works on every fresh clone without a build step.
+    // We trade per-click events for zero install friction; the cursor-zoom
+    // editor effect still works since it's position-driven. macos-cursor-manager
+    // is loaded for cursor-shape identification (independent of iohook).
+    macosCursorManager.initializeMacOSCursorManager()
+    log.info('[MouseTracker] Initialized macOS mouse tracking via Electron screen API polling.')
   }
 }
 
@@ -289,88 +289,60 @@ class WindowsMouseTracker extends EventEmitter implements IMouseTracker {
   }
 }
 
+// macOS implementation that polls Electron's `screen.getCursorScreenPoint()`
+// at MOUSE_RECORDING_FPS. This avoids the iohook-macos native module, which
+// ships broken on npm (no prebuilt, no source) and would otherwise require
+// every developer to clone and build a third-party native module from source.
+//
+// Trade-off: we get cursor *position* (the input the editor cursor-zoom
+// effect needs) but not click events. Click events would require a global
+// CGEventTap, which needs both an Accessibility permission grant *and* a
+// working native binding. If clicks become essential, swap this for a Swift
+// helper subprocess that taps CGEventTap and pipes events over stdio.
 class MacOSMouseTracker extends EventEmitter implements IMouseTracker {
   private pollIntervalId: NodeJS.Timeout | null = null
   private currentCursorName = 'arrow'
   private currentAniFrame = 0
-  private lastPosition = { x: 0, y: 0 }
 
   async start(): Promise<boolean> {
-    if (!iohook) {
-      log.error('[MouseTracker-macOS] Cannot start, iohook-macos module not loaded.')
-      return false
-    }
-
-    // Check accessibility permissions
-    const permissions = iohook.checkAccessibilityPermissions()
-    if (!permissions.hasPermissions) {
-      log.warn('[MouseTracker-macOS] Accessibility permissions not granted. Requesting...')
-      dialog.showErrorBox(
-        'Permissions Required',
-        'ScreenArc needs Accessibility permissions to track mouse clicks. Please grant access in System Settings > Privacy & Security > Accessibility, then restart the recording.',
-      )
-      iohook.requestAccessibilityPermissions()
-      return false // MODIFIED: Signal failure if permissions are not granted
-    }
-
-    iohook.enablePerformanceMode()
-    iohook.setPollingRate(1000 / MOUSE_RECORDING_FPS)
-
-    // Just update position, don't emit from here
-    iohook.on('mouseMoved', (event: any) => {
-      this.lastPosition = { x: event.x, y: event.y }
-    })
-
-    // Handle clicks separately
-    iohook.on('leftMouseDown', (event: any) => this.emitClickEvent(event, true))
-    iohook.on('rightMouseDown', (event: any) => this.emitClickEvent(event, true))
-    iohook.on('otherMouseDown', (event: any) => this.emitClickEvent(event, true))
-    iohook.on('leftMouseup', (event: any) => this.emitClickEvent(event, false))
-    iohook.on('rightMouseup', (event: any) => this.emitClickEvent(event, false))
-    iohook.on('otherMouseup', (event: any) => this.emitClickEvent(event, false))
-
-    iohook.startMonitoring()
-
-    // This poller is the SOLE source of 'move' events, ensuring a constant stream.
     this.pollIntervalId = setInterval(() => this.pollAndEmitMove(), 1000 / MOUSE_RECORDING_FPS)
-    log.info('[MouseTracker-macOS] Started.')
+    log.info('[MouseTracker-macOS] Started (Electron screen.getCursorScreenPoint polling).')
     return true
   }
 
   stop() {
     if (this.pollIntervalId) clearInterval(this.pollIntervalId)
-    if (iohook) {
-      iohook.removeAllListeners()
-      iohook.stopMonitoring()
-    }
+    this.pollIntervalId = null
     log.info('[MouseTracker-macOS] Stopped.')
   }
 
-  private emitClickEvent = (event: any, isPressed: boolean) => {
-    // A click event provides the most up-to-date cursor position.
-    this.lastPosition = { x: event.x, y: event.y }
-    // Check for cursor shape changes right before emitting the click.
-    this.updateCursorState()
-
-    const data: MetaDataItem = {
-      timestamp: Date.now(),
-      x: event.x,
-      y: event.y,
-      type: 'click',
-      cursorImageKey: `${this.currentCursorName}-${this.currentAniFrame}`,
-      button: this.mapButton(event.button),
-      pressed: isPressed,
-    }
-    this.emit('data', data)
-  }
-
   private pollAndEmitMove = () => {
+    let point: { x: number; y: number }
+    try {
+      point = screen.getCursorScreenPoint()
+    } catch (err) {
+      log.error('[MouseTracker-macOS] getCursorScreenPoint threw:', err)
+      return
+    }
+
+    // `screen.getCursorScreenPoint()` returns coordinates in DIPs (logical
+    // pixels), but `recordingGeometry` over in recording-manager.ts is in
+    // physical pixels (multiplied by display.scaleFactor). On a Retina
+    // display these differ by 2×, so without this conversion the geometry
+    // filter would reject most points and the editor would render the
+    // cursor in the wrong place. Convert here, once, in the only spot that
+    // sources DIP coordinates.
+    const display = screen.getDisplayNearestPoint(point)
+    const scale = display.scaleFactor || 1
+    const physicalX = Math.round(point.x * scale)
+    const physicalY = Math.round(point.y * scale)
+
     this.updateCursorState()
 
     const data: MetaDataItem = {
       timestamp: Date.now(),
-      x: this.lastPosition.x,
-      y: this.lastPosition.y,
+      x: physicalX,
+      y: physicalY,
       type: 'move',
       cursorImageKey: `${this.currentCursorName}-${this.currentAniFrame}`,
     }
@@ -379,23 +351,9 @@ class MacOSMouseTracker extends EventEmitter implements IMouseTracker {
 
   private updateCursorState = () => {
     this.currentCursorName = macosCursorManager.getCurrentCursorName()
-    // NOTE: Animated cursors like the spinning wheel are not currently
-    // identifiable by name with the native module being used.
-    // Therefore, animation frame calculation is not implemented for macOS.
+    // Animated cursors (spinning wheel) aren't identifiable by name with the
+    // native cursor module, so animation frame calculation stays at 0.
     this.currentAniFrame = 0
-  }
-
-  private mapButton = (code: number) => {
-    switch (code) {
-      case MOUSE_BUTTONS.MACOS.LEFT:
-        return 'left'
-      case MOUSE_BUTTONS.MACOS.RIGHT:
-        return 'right'
-      case MOUSE_BUTTONS.MACOS.MIDDLE:
-        return 'middle'
-      default:
-        return 'unknown'
-    }
   }
 }
 
@@ -416,10 +374,7 @@ export function createMouseTracker(): IMouseTracker | null {
       return new WindowsMouseTracker()
 
     case 'darwin':
-      if (!iohook) {
-        log.warn('[MouseTracker] iohook-macos not available — mouse tracking disabled (rebuild native modules to fix)')
-        return null
-      }
+      // Always available — uses Electron's built-in screen API, no native deps.
       return new MacOSMouseTracker()
     default:
       log.warn(`Mouse tracking not supported on platform: ${process.platform}`)
