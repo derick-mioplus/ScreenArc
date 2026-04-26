@@ -5,7 +5,7 @@ import log from 'electron-log/main'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fsPromises from 'node:fs/promises'
-import { app, Menu, Tray, nativeImage, screen, ipcMain, dialog, systemPreferences, desktopCapturer } from 'electron'
+import { app, Menu, Tray, nativeImage, screen, ipcMain, dialog, systemPreferences, desktopCapturer, shell } from 'electron'
 import { appState } from '../state'
 import { getFFmpegPath, ensureDirectoryExists } from '../lib/utils'
 import { VITE_PUBLIC } from '../lib/constants'
@@ -15,15 +15,24 @@ import { createEditorWindow, cleanupEditorFiles } from '../windows/editor-window
 import { createSavingWindow, createSelectionWindow } from '../windows/temporary-windows'
 import type { RecordingSession, RecordingGeometry } from '../state'
 import { SystemAudioWriter } from './system-audio-writer'
-import { buildMuxArgs } from './build-mux-args'
+import { ScreenVideoWriter } from './screen-video-writer'
+import { buildMuxArgs, buildMacMuxArgs } from './build-mux-args'
 
 const FFMPEG_PATH = getFFmpegPath()
 const SYSTEM_AUDIO_STOP_TIMEOUT_MS = 5000
+const SCREEN_CAPTURE_STOP_TIMEOUT_MS = 5000
 
-// Module-scoped writer used by the renderer-streamed system-audio capture path.
-// Lives outside appState because it's a helper, not session data.
+// Module-scoped writers used by the renderer-streamed capture paths. They
+// live outside appState because they're helpers, not session data.
 const systemAudioWriter = new SystemAudioWriter()
+const screenVideoWriter = new ScreenVideoWriter()
 let pendingSystemAudioStop:
+  | {
+      promise: Promise<void>
+      resolve: () => void
+    }
+  | null = null
+let pendingScreenCaptureStop:
   | {
       promise: Promise<void>
       resolve: () => void
@@ -34,9 +43,19 @@ export function getSystemAudioWriter(): SystemAudioWriter {
   return systemAudioWriter
 }
 
+export function getScreenVideoWriter(): ScreenVideoWriter {
+  return screenVideoWriter
+}
+
 export function markSystemAudioStopped(): void {
   pendingSystemAudioStop?.resolve()
   pendingSystemAudioStop = null
+}
+
+export function markScreenCaptureStopped(): void {
+  log.info('[ScreenCapture] Renderer acknowledged stop; resolving waiter.')
+  pendingScreenCaptureStop?.resolve()
+  pendingScreenCaptureStop = null
 }
 
 function createSystemAudioStopWaiter(): Promise<void> {
@@ -51,6 +70,20 @@ function createSystemAudioStopWaiter(): Promise<void> {
   }
 
   return pendingSystemAudioStop.promise
+}
+
+function createScreenCaptureStopWaiter(): Promise<void> {
+  if (!pendingScreenCaptureStop) {
+    let resolve!: () => void
+    pendingScreenCaptureStop = {
+      promise: new Promise<void>((res) => {
+        resolve = res
+      }),
+      resolve,
+    }
+  }
+
+  return pendingScreenCaptureStop.promise
 }
 
 async function waitForSystemAudioStop(waiter: Promise<void>): Promise<void> {
@@ -69,6 +102,25 @@ async function waitForSystemAudioStop(waiter: Promise<void>): Promise<void> {
       log.warn('[SystemAudio] Renderer did not acknowledge stop before timeout; finalizing writer anyway.')
     }
     pendingSystemAudioStop = null
+  }
+}
+
+async function waitForScreenCaptureStop(waiter: Promise<void>): Promise<void> {
+  let didAcknowledge = false
+  try {
+    await Promise.race([
+      waiter.then(() => {
+        didAcknowledge = true
+      }),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SCREEN_CAPTURE_STOP_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (!didAcknowledge) {
+      log.warn('[ScreenCapture] Renderer did not acknowledge stop before timeout; finalizing writer anyway.')
+    }
+    pendingScreenCaptureStop = null
   }
 }
 
@@ -153,10 +205,14 @@ async function validateRecordingFiles(session: RecordingSession): Promise<boolea
 
 /**
  * The core function that spawns FFmpeg and the mouse tracker to begin recording.
- * @param inputArgs - Platform-specific FFmpeg input arguments.
+ * @param inputArgs - Platform-specific FFmpeg input arguments (mic + webcam only when
+ *                    useRendererScreenCapture is true; otherwise also includes screen).
  * @param hasWebcam - Flag indicating if webcam recording is enabled.
  * @param hasMic - Flag indicating if microphone recording is enabled.
  * @param hasSystemAudio - Flag indicating if renderer-side system audio capture is enabled.
+ * @param useRendererScreenCapture - macOS only: capture screen via the renderer's
+ *                                    MediaRecorder instead of FFmpeg avfoundation.
+ *                                    avfoundation's screen input is broken on macOS 14+.
  * @param recordingGeometry - The logical dimensions and position of the recording area.
  */
 async function startActualRecording(
@@ -164,6 +220,7 @@ async function startActualRecording(
   hasWebcam: boolean,
   hasMic: boolean,
   hasSystemAudio: boolean,
+  useRendererScreenCapture: boolean,
   recordingGeometry: RecordingGeometry,
 ) {
   const recordingDir = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.screenarc')
@@ -172,8 +229,35 @@ async function startActualRecording(
 
   const screenVideoPath = path.join(recordingDir, `${baseName}-screen.mp4`)
   const webcamVideoPath = hasWebcam ? path.join(recordingDir, `${baseName}-webcam.mp4`) : undefined
-  const systemAudioPath = hasSystemAudio ? path.join(recordingDir, `${baseName}-system.webm`) : undefined
   const metadataPath = path.join(recordingDir, `${baseName}.json`)
+
+  // On macOS the renderer captures the screen (and folds in optional system
+  // audio) directly into one .webm file. On other platforms FFmpeg captures
+  // the screen as before, and the renderer only delivers a separate
+  // system-audio webm when the user enabled it.
+  const screenWebmPath = useRendererScreenCapture
+    ? path.join(recordingDir, `${baseName}-screen.webm`)
+    : undefined
+  const webmHasSystemAudio = useRendererScreenCapture && hasSystemAudio
+  const systemAudioPath =
+    !useRendererScreenCapture && hasSystemAudio
+      ? path.join(recordingDir, `${baseName}-system.webm`)
+      : undefined
+  const micAudioPath =
+    useRendererScreenCapture && hasMic ? path.join(recordingDir, `${baseName}-mic.m4a`) : undefined
+
+  log.info('[RecordingManager] Resolved file paths for session:', {
+    baseName,
+    screenVideoPath,
+    screenWebmPath,
+    systemAudioPath,
+    micAudioPath,
+    webcamVideoPath,
+    useRendererScreenCapture,
+    webmHasSystemAudio,
+    hasMic,
+    hasWebcam,
+  })
 
   // Store recordingGeometry in the session
   appState.currentRecordingSession = {
@@ -181,13 +265,23 @@ async function startActualRecording(
     webcamVideoPath,
     systemAudioPath,
     hasMicAudio: hasMic,
+    screenWebmPath,
+    webmHasSystemAudio,
+    micAudioPath,
     metadataPath,
     recordingGeometry,
   }
 
   if (systemAudioPath) {
+    log.info(`[SystemAudio] Starting writer for ${systemAudioPath}`)
     markSystemAudioStopped()
     systemAudioWriter.start(systemAudioPath)
+  }
+
+  if (screenWebmPath) {
+    log.info(`[ScreenCapture] Starting writer for ${screenWebmPath}`)
+    markScreenCaptureStopped()
+    screenVideoWriter.start(screenWebmPath)
   }
 
   appState.recorderWin?.minimize()
@@ -226,32 +320,45 @@ async function startActualRecording(
     }
   }
 
-  const finalArgs = buildFfmpegArgs(inputArgs, hasWebcam, hasMic, screenVideoPath, webcamVideoPath)
-  log.info(`[FFMPEG] Starting FFmpeg with args: ${finalArgs.join(' ')}`)
-  appState.ffmpegProcess = spawn(FFMPEG_PATH, finalArgs)
+  // On macOS we may not need FFmpeg at all: if the user disabled both mic and
+  // webcam, the renderer's MediaRecorder writes the only output we need.
+  const needsFfmpeg = !useRendererScreenCapture || hasMic || hasWebcam
+  if (needsFfmpeg) {
+    const finalArgs = useRendererScreenCapture
+      ? buildMacFfmpegArgs(inputArgs, hasMic, hasWebcam, micAudioPath, webcamVideoPath)
+      : buildFfmpegArgs(inputArgs, hasWebcam, hasMic, screenVideoPath, webcamVideoPath)
+    log.info(`[FFMPEG] Starting FFmpeg with args: ${finalArgs.join(' ')}`)
+    appState.ffmpegProcess = spawn(FFMPEG_PATH, finalArgs)
 
-  // Monitor FFmpeg's stderr for progress, errors, and sync timing
-  appState.ffmpegProcess.stderr.on('data', (data: any) => {
-    const message = data.toString()
-    log.warn(`[FFMPEG stderr]: ${message}`)
+    // Monitor FFmpeg's stderr for progress, errors, and sync timing
+    appState.ffmpegProcess.stderr.on('data', (data: any) => {
+      const message = data.toString()
+      log.warn(`[FFMPEG stderr]: ${message}`)
 
-    // Early detection of fatal errors to provide immediate feedback
-    const fatalErrorKeywords = [
-      'Cannot open display',
-      'Invalid argument',
-      'Device not found',
-      'Unknown input format',
-      'error opening device',
-    ]
-    if (fatalErrorKeywords.some((keyword) => message.toLowerCase().includes(keyword.toLowerCase()))) {
-      log.error(`[FFMPEG] Fatal error detected: ${message}`)
-      dialog.showErrorBox(
-        'Recording Failed',
-        `A critical error occurred while starting the recording process:\n\n${message}\n\nPlease check your device permissions and configurations.`,
-      )
-      setTimeout(() => cleanupAndDiscard(), 100)
-    }
-  })
+      // Early detection of fatal errors to provide immediate feedback
+      const fatalErrorKeywords = [
+        'Cannot open display',
+        'Invalid argument',
+        'Device not found',
+        'Unknown input format',
+        'error opening device',
+      ]
+      if (fatalErrorKeywords.some((keyword) => message.toLowerCase().includes(keyword.toLowerCase()))) {
+        log.error(`[FFMPEG] Fatal error detected: ${message}`)
+        dialog.showErrorBox(
+          'Recording Failed',
+          `A critical error occurred while starting the recording process:\n\n${message}\n\nPlease check your device permissions and configurations.`,
+        )
+        setTimeout(() => cleanupAndDiscard(), 100)
+      }
+    })
+
+    appState.ffmpegProcess.on('exit', (code, signal) => {
+      log.info(`[FFMPEG] Process exited (code=${code}, signal=${signal}).`)
+    })
+  } else {
+    log.info('[RecordingManager] No FFmpeg process needed — screen video and audio come entirely from the renderer.')
+  }
 
   // Notify the recorder window that recording has started
   appState.recorderWin?.webContents.send('recording-started')
@@ -312,6 +419,48 @@ function buildFfmpegArgs(
 
   return finalArgs
 }
+
+/**
+ * macOS-only FFmpeg args builder. We capture the screen in the renderer (see
+ * src/lib/screen-capture.ts), so this only handles mic and/or webcam. Mic
+ * lands in its own AAC/m4a file because there's no longer a screen output to
+ * route it into; the post-recording mux folds it back in.
+ *
+ * Input order in `inputArgs` mirrors `startRecording`: mic first (if any),
+ * then webcam (if any).
+ */
+function buildMacFfmpegArgs(
+  inputArgs: string[],
+  hasMic: boolean,
+  hasWebcam: boolean,
+  micOut?: string,
+  webcamOut?: string,
+): string[] {
+  const finalArgs = [...inputArgs]
+  const micIndex = hasMic ? 0 : -1
+  const webcamIndex = hasMic ? (hasWebcam ? 1 : -1) : hasWebcam ? 0 : -1
+
+  if (hasMic && micOut) {
+    finalArgs.push('-map', `${micIndex}:a`, '-c:a', 'aac', '-b:a', '192k', micOut)
+  }
+
+  if (hasWebcam && webcamOut) {
+    finalArgs.push(
+      '-map',
+      `${webcamIndex}:v`,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+      webcamOut,
+    )
+  }
+
+  return finalArgs
+}
+
 /**
  * Creates the system tray icon and context menu for controlling an active recording.
  */
@@ -373,7 +522,6 @@ export async function startRecording(options: any) {
         defaultId: 0,
       })
       if (response === 0) {
-        const { shell } = require('electron')
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
       }
       return { canceled: true }
@@ -480,11 +628,12 @@ export async function startRecording(options: any) {
         )
         break
       case 'darwin':
-        baseFfmpegArgs.push(
-          '-f',
-          'avfoundation',
-          '-i',
-          `${allDisplays.findIndex((d) => d.id === targetDisplay.id) || 0}:none`,
+        // macOS 14+ can no longer capture the screen via avfoundation —
+        // AVCaptureScreenInput is deprecated and returns "Input/output error".
+        // We capture the screen in the renderer (ScreenCaptureKit) instead.
+        // No FFmpeg screen input here.
+        log.info(
+          `[RecordingManager] macOS fullscreen: deferring screen capture to renderer (display.id=${targetDisplay.id}, ${safeWidth}x${safeHeight}).`,
         )
         break
     }
@@ -546,8 +695,21 @@ export async function startRecording(options: any) {
   if (process.platform === 'linux') {
     appState.originalCursorScale = await getCursorScale()
   }
-  log.info('[RecordingManager] Starting actual recording with args:', baseFfmpegArgs)
-  return startActualRecording(baseFfmpegArgs, !!webcam, !!mic, wantsSystemAudio, recordingGeometry)
+  const useRendererScreenCapture = process.platform === 'darwin'
+  log.info('[RecordingManager] Starting actual recording with args:', baseFfmpegArgs, {
+    hasWebcam: !!webcam,
+    hasMic: !!mic,
+    wantsSystemAudio,
+    useRendererScreenCapture,
+  })
+  return startActualRecording(
+    baseFfmpegArgs,
+    !!webcam,
+    !!mic,
+    wantsSystemAudio,
+    useRendererScreenCapture,
+    recordingGeometry,
+  )
 }
 
 /**
@@ -555,30 +717,55 @@ export async function startRecording(options: any) {
  */
 export async function stopRecording() {
   restoreOriginalCursorScale()
-  log.info('Stopping recording, preparing to save...')
+  log.info('[StopRecord] Stopping recording, preparing to save...')
   appState.tray?.destroy()
   appState.tray = null
   createSavingWindow()
 
   const session = appState.currentRecordingSession
+  log.info('[StopRecord] Current session:', {
+    screenVideoPath: session?.screenVideoPath,
+    screenWebmPath: session?.screenWebmPath,
+    systemAudioPath: session?.systemAudioPath,
+    micAudioPath: session?.micAudioPath,
+    webcamVideoPath: session?.webcamVideoPath,
+    webmHasSystemAudio: session?.webmHasSystemAudio,
+    hasMicAudio: session?.hasMicAudio,
+  })
   const waitForRendererSystemAudioStop = session?.systemAudioPath ? createSystemAudioStopWaiter() : null
+  const waitForRendererScreenCaptureStop = session?.screenWebmPath ? createScreenCaptureStopWaiter() : null
 
-  // Tell the renderer to stop its MediaRecorder so any pending chunks land in
-  // the writer's queue. The recorder window flushes a final chunk on stop().
+  // Tell the renderer to stop its MediaRecorder(s) so any pending chunks land
+  // in the writer's queue. The renderer flushes a final chunk on stop().
   if (waitForRendererSystemAudioStop) {
+    log.info('[StopRecord] Asking renderer to stop system-audio MediaRecorder.')
     appState.recorderWin?.webContents.send('recorder:stop-system-audio')
+  }
+  if (waitForRendererScreenCaptureStop) {
+    log.info('[StopRecord] Asking renderer to stop screen-capture MediaRecorder.')
+    appState.recorderWin?.webContents.send('recorder:stop-screen-capture')
   }
 
   // Step 1: Wait for FFmpeg and tracker to finish
   await cleanupAndSave()
-  log.info('FFmpeg process finished and file is finalized.')
+  log.info('[StopRecord] FFmpeg process finished and file is finalized (or never spawned).')
 
   // Step 1b: Wait for the renderer to finish forwarding the tail chunk, then
-  // flush and finalize the system-audio file (no-op when not used).
+  // flush and finalize the renderer-side files (no-op when not used).
   if (waitForRendererSystemAudioStop) {
     await waitForSystemAudioStop(waitForRendererSystemAudioStop)
   }
   await systemAudioWriter.finalize()
+
+  if (waitForRendererScreenCaptureStop) {
+    await waitForScreenCaptureStop(waitForRendererScreenCaptureStop)
+  }
+  try {
+    await screenVideoWriter.finalize()
+    log.info('[StopRecord] Screen-capture writer finalized successfully.')
+  } catch (err) {
+    log.error('[StopRecord] Screen-capture writer failed during finalize:', err)
+  }
 
   const finalizedSession = appState.currentRecordingSession
   if (!finalizedSession) {
@@ -591,10 +778,25 @@ export async function stopRecording() {
   // Notify recorder window that the recording has finished, allowing it to reset its UI
   appState.recorderWin?.webContents.send('recording-finished', { canceled: false, ...finalizedSession })
 
-  // Step 2: Process and save metadata (after video file is complete)
+  // Step 2a: macOS — mux the renderer WebM (with optional system audio + mic)
+  // into the final .mp4 BEFORE metadata processing so processAndSaveMetadata
+  // can stat() the final file.
+  if (finalizedSession.screenWebmPath) {
+    try {
+      await muxMacScreenWebm(finalizedSession)
+    } catch (err) {
+      log.error('[StopRecord] macOS mux failed. The screen webm will be kept for inspection.', err)
+      // Leave artifacts in place so the user can recover. Validation will
+      // fail below and the user gets a clear error.
+    }
+  }
+
+  // Step 2b: Process and save metadata (after video file is complete)
   await processAndSaveMetadata(finalizedSession)
 
-  // Step 2b: If we captured system audio, mux it into the screen file.
+  // Step 2c: Linux/Windows — if we captured system audio separately, mux it
+  // into the (already-existing) screen mp4. Skipped on macOS because the
+  // system audio is already inside the webm and folded in by muxMacScreenWebm.
   if (finalizedSession.systemAudioPath) {
     try {
       await muxSystemAudio(finalizedSession)
@@ -709,6 +911,110 @@ async function muxSystemAudio(session: RecordingSession): Promise<void> {
 }
 
 /**
+ * macOS only: transcodes the renderer-recorded screen WebM (VP9 + optional
+ * Opus) into the final screen MP4 (H.264 + AAC), folding in the optional mic
+ * AAC track produced by FFmpeg. After this returns successfully:
+ *   - session.screenVideoPath has been (re)created with the muxed MP4
+ *   - session.screenWebmPath / micAudioPath have been deleted and cleared
+ *   - session.systemAudioPath stays unset (system audio rode inside the webm)
+ */
+async function muxMacScreenWebm(session: RecordingSession): Promise<void> {
+  if (!session.screenWebmPath) return
+
+  // Confirm the webm exists and is non-empty before launching ffmpeg.
+  let webmStat
+  try {
+    webmStat = await fsPromises.stat(session.screenWebmPath)
+  } catch (err) {
+    log.error(
+      '[MacMux] Screen webm missing — renderer never produced output. Cannot proceed.',
+      err,
+    )
+    throw new Error('Screen recording produced no output (renderer did not write any chunks).')
+  }
+  if (webmStat.size === 0) {
+    log.error('[MacMux] Screen webm is empty (zero bytes). Aborting mux.')
+    throw new Error('Screen recording produced an empty file.')
+  }
+  log.info(`[MacMux] Screen webm size: ${webmStat.size} bytes (${session.screenWebmPath}).`)
+
+  // Validate optional mic input. Drop a missing/empty mic file silently —
+  // the recording is still useful with just the video (and possibly system
+  // audio inside the webm).
+  let resolvedMicPath = session.micAudioPath
+  if (resolvedMicPath) {
+    try {
+      const micStat = await fsPromises.stat(resolvedMicPath)
+      if (micStat.size === 0) {
+        log.warn('[MacMux] Mic file is empty; dropping mic from mux.')
+        resolvedMicPath = undefined
+      } else {
+        log.info(`[MacMux] Mic file size: ${micStat.size} bytes (${resolvedMicPath}).`)
+      }
+    } catch (err) {
+      log.warn('[MacMux] Mic file missing; dropping mic from mux.', err)
+      resolvedMicPath = undefined
+    }
+  }
+
+  const args = buildMacMuxArgs({
+    screenWebmInput: session.screenWebmPath,
+    micAudioInput: resolvedMicPath,
+    output: session.screenVideoPath,
+    webmHasSystemAudio: !!session.webmHasSystemAudio,
+  })
+  log.info(`[MacMux] Running ffmpeg ${args.join(' ')}`)
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(FFMPEG_PATH, args)
+    let stderr = ''
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString()
+    })
+    proc.on('error', (err) => {
+      log.error('[MacMux] ffmpeg spawn error:', err)
+      reject(err)
+    })
+    proc.on('close', (code) => {
+      if (code === 0) {
+        log.info('[MacMux] ffmpeg mux exited 0 — final mp4 is ready.')
+        resolve()
+      } else {
+        log.error(`[MacMux] ffmpeg exited ${code}: ${stderr.slice(-2000)}`)
+        reject(new Error(`ffmpeg mac mux exited ${code}: ${stderr.slice(-500)}`))
+      }
+    })
+  })
+
+  // Confirm output exists and isn't empty before cleaning up sources.
+  try {
+    const outStat = await fsPromises.stat(session.screenVideoPath)
+    log.info(`[MacMux] Final mp4 size: ${outStat.size} bytes (${session.screenVideoPath}).`)
+    if (outStat.size === 0) {
+      throw new Error('Mux produced empty output file.')
+    }
+  } catch (err) {
+    log.error('[MacMux] Could not stat output mp4 after mux:', err)
+    throw err
+  }
+
+  // Tidy up source files. We only delete after we've confirmed the mp4 is
+  // good, so a half-broken mux still leaves the user's data on disk.
+  await fsPromises.unlink(session.screenWebmPath).catch((err) => {
+    log.warn('[MacMux] Failed to delete screen webm after mux.', err)
+  })
+  if (session.micAudioPath) {
+    await fsPromises.unlink(session.micAudioPath).catch((err) => {
+      log.warn('[MacMux] Failed to delete mic m4a after mux.', err)
+    })
+  }
+  session.screenWebmPath = undefined
+  session.micAudioPath = undefined
+  session.webmHasSystemAudio = false
+  log.info('[MacMux] Cleanup complete.')
+}
+
+/**
  * Cancels the recording and discards all associated files and processes.
  */
 export async function cancelRecording() {
@@ -806,16 +1112,18 @@ export async function cleanupAndDiscard() {
   if (!appState.currentRecordingSession) return
   log.warn('[Cleanup] Discarding current recording session.')
   markSystemAudioStopped()
+  markScreenCaptureStopped()
   const sessionToDiscard = { ...appState.currentRecordingSession }
   appState.currentRecordingSession = null
 
   appState.ffmpegProcess?.kill('SIGKILL')
   appState.ffmpegProcess = null
 
-  // Tell the renderer to stop its MediaRecorder; even if it ignores us,
-  // aborting the writer means subsequent IPC chunks are no-ops.
+  // Tell the renderer to stop its MediaRecorder(s); even if it ignores us,
+  // aborting the writers means subsequent IPC chunks are no-ops.
   appState.recorderWin?.webContents.send('recorder:stop-system-audio')
-  await systemAudioWriter.abort()
+  appState.recorderWin?.webContents.send('recorder:stop-screen-capture')
+  await Promise.allSettled([systemAudioWriter.abort(), screenVideoWriter.abort()])
 
   appState.mouseTracker?.stop()
   appState.mouseTracker = null
@@ -832,6 +1140,12 @@ export async function cleanupAndDiscard() {
     await cleanupEditorFiles(sessionToDiscard)
     if (sessionToDiscard.systemAudioPath) {
       await fsPromises.unlink(sessionToDiscard.systemAudioPath).catch(() => {})
+    }
+    if (sessionToDiscard.screenWebmPath) {
+      await fsPromises.unlink(sessionToDiscard.screenWebmPath).catch(() => {})
+    }
+    if (sessionToDiscard.micAudioPath) {
+      await fsPromises.unlink(sessionToDiscard.micAudioPath).catch(() => {})
     }
   }, 200)
 }
@@ -854,7 +1168,7 @@ export async function cleanupOrphanedRecordings() {
 
   try {
     const allFiles = await fsPromises.readdir(recordingDir)
-    const filePattern = /^ScreenArc-recording-\d+(-screen\.mp4|-screen\.muxed\.mp4|-webcam\.mp4|-system\.webm|\.json)$/
+    const filePattern = /^ScreenArc-recording-\d+(-screen\.mp4|-screen\.muxed\.mp4|-screen\.webm|-webcam\.mp4|-system\.webm|-mic\.m4a|\.json)$/
     const filesToDelete = allFiles
       .filter((file) => filePattern.test(file))
       .map((file) => path.join(recordingDir, file))

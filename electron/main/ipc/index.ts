@@ -38,6 +38,9 @@ export function registerIpcHandlers() {
   ipcMain.handle('recording:load-from-file', recordingHandlers.handleLoadVideoFromFile)
   ipcMain.handle('recording:write-system-audio', recordingHandlers.handleWriteSystemAudioChunk)
   ipcMain.handle('recording:system-audio-stopped', recordingHandlers.handleSystemAudioStopped)
+  ipcMain.handle('recording:write-screen-video', recordingHandlers.handleWriteScreenVideoChunk)
+  ipcMain.handle('recording:screen-capture-stopped', recordingHandlers.handleScreenCaptureStopped)
+  ipcMain.handle('recording:get-screen-sources', recordingHandlers.handleGetScreenSources)
 
   // Export
   ipcMain.handle('export:start', exportHandlers.handleStartExport)
