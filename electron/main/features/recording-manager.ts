@@ -284,7 +284,21 @@ async function startActualRecording(
     screenVideoWriter.start(screenWebmPath)
   }
 
-  appState.recorderWin?.minimize()
+  // Hide the recorder window before recording starts so it doesn't appear in the capture.
+  // macOS: minimize() preserves the JS runtime priority that the system-audio MediaRecorder
+  //        relies on (hide() lets Chromium throttle the renderer, dropping audio chunks).
+  // Windows/Linux: hide() is more reliable — minimize() can leave a taskbar artifact or
+  //                still show during the minimize animation in the first recorded frames.
+  if (process.platform === 'darwin') {
+    appState.recorderWin?.minimize()
+  } else {
+    appState.recorderWin?.hide()
+  }
+
+  // Brief delay so the window-hide propagates to the OS compositor before FFmpeg starts
+  // capturing. Without this, the first ~100ms of the recording can still contain the
+  // recorder window mid-animation on Windows.
+  await new Promise((resolve) => setTimeout(resolve, 300))
 
   // Reset state for the new session
   appState.recordingStartTime = Date.now()
