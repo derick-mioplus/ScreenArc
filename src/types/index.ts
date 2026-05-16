@@ -1,5 +1,5 @@
 // --- Types ---
-export type BackgroundType = 'color' | 'gradient' | 'image' | 'wallpaper'
+export type BackgroundType = 'color' | 'gradient' | 'image' | 'wallpaper' | 'animated'
 export type AspectRatio = '16:9' | '9:16' | '4:3' | '3:4' | '1:1'
 export type SidePanelTab = 'general' | 'camera' | 'cursor' | 'audio' | 'animation' | 'settings'
 
@@ -11,6 +11,9 @@ export interface Background {
   gradientDirection?: string
   imageUrl?: string
   thumbnailUrl?: string
+  // Animated background fields (type === 'animated')
+  animatedColor1?: string
+  animatedColor2?: string
 }
 
 export interface FrameStyles {

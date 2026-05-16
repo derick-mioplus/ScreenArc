@@ -63,6 +63,7 @@ const drawBackground = async (
   height: number,
   backgroundState: EditorState['frameStyles']['background'],
   preloadedImage: HTMLImageElement | null,
+  currentTime: number,
 ): Promise<void> => {
   ctx.clearRect(0, 0, width, height)
 
@@ -71,6 +72,29 @@ const drawBackground = async (
       ctx.fillStyle = backgroundState.color || '#000000'
       ctx.fillRect(0, 0, width, height)
       break
+    case 'animated': {
+      const c1 = backgroundState.animatedColor1 || '#1e293b'
+      const c2 = backgroundState.animatedColor2 || '#475569'
+
+      const cyclesPerSecond = 1 / 30
+      const angle = (currentTime * cyclesPerSecond * 2 * Math.PI) % (2 * Math.PI)
+
+      const cx = width / 2
+      const cy = height / 2
+      const radius = Math.sqrt(width * width + height * height) / 2
+      const x1 = cx + Math.cos(angle) * radius
+      const y1 = cy + Math.sin(angle) * radius
+      const x2 = cx - Math.cos(angle) * radius
+      const y2 = cy - Math.sin(angle) * radius
+
+      const gradient = ctx.createLinearGradient(x1, y1, x2, y2)
+      gradient.addColorStop(0, c1)
+      gradient.addColorStop(1, c2)
+
+      ctx.fillStyle = gradient
+      ctx.fillRect(0, 0, width, height)
+      break
+    }
     case 'gradient': {
       const start = backgroundState.gradientStart || '#000000'
       const end = backgroundState.gradientEnd || '#ffffff'
@@ -178,7 +202,7 @@ export const drawScene = async (
   ctx.imageSmoothingQuality = 'high'
 
   // --- 1. Draw Background ---
-  await drawBackground(ctx, outputWidth, outputHeight, state.frameStyles.background, preloadedBgImage)
+  await drawBackground(ctx, outputWidth, outputHeight, state.frameStyles.background, preloadedBgImage, currentTime)
 
   // --- 2. Calculate Frame and Content Dimensions ---
   const { frameStyles, videoDimensions } = state

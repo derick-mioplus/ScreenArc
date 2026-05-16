@@ -10,7 +10,105 @@ import { ControlGroup } from './ControlGroup'
 import { Button } from '../../ui/button'
 import { ColorPickerRoundedRect } from '../../ui/color-picker'
 
-type BackgroundTab = 'color' | 'gradient' | 'image' | 'wallpaper'
+type BackgroundTab = 'color' | 'gradient' | 'image' | 'wallpaper' | 'animated'
+
+const ANIMATED_PRESETS = [
+  { name: 'Premium Minimal', color1: '#1e293b', color2: '#475569' },
+  { name: 'Indigo Drift', color1: '#1e1b4b', color2: '#312e81' },
+  { name: 'Warm Dusk', color1: '#1c1917', color2: '#44403c' },
+]
+
+const AnimatedSelector = () => {
+  const { frameStyles, updateBackground } = useEditorStore()
+  const [localColors, setLocalColors] = useState({
+    color1: frameStyles.background.animatedColor1 || '#1e293b',
+    color2: frameStyles.background.animatedColor2 || '#475569',
+  })
+
+  useEffect(() => {
+    if (frameStyles.background.type === 'animated') {
+      setLocalColors({
+        color1: frameStyles.background.animatedColor1 || '#1e293b',
+        color2: frameStyles.background.animatedColor2 || '#475569',
+      })
+    }
+  }, [frameStyles.background.animatedColor1, frameStyles.background.animatedColor2, frameStyles.background.type])
+
+  const applyPreset = (preset: (typeof ANIMATED_PRESETS)[number]) => {
+    setLocalColors({ color1: preset.color1, color2: preset.color2 })
+    updateBackground({
+      type: 'animated',
+      animatedColor1: preset.color1,
+      animatedColor2: preset.color2,
+    })
+  }
+
+  const applyCustom = () =>
+    updateBackground({
+      type: 'animated',
+      animatedColor1: localColors.color1,
+      animatedColor2: localColors.color2,
+    })
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h5 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">Presets</h5>
+        <div className="grid grid-cols-3 gap-2">
+          {ANIMATED_PRESETS.map((preset) => {
+            const isActive =
+              frameStyles.background.type === 'animated' &&
+              frameStyles.background.animatedColor1 === preset.color1 &&
+              frameStyles.background.animatedColor2 === preset.color2
+            return (
+              <button
+                key={preset.name}
+                onClick={() => applyPreset(preset)}
+                className={cn(
+                  'relative aspect-video rounded-lg overflow-hidden border-2 transition-all duration-200 hover:scale-105',
+                  isActive
+                    ? 'border-primary ring-2 ring-primary/20 scale-105'
+                    : 'border-sidebar-border hover:border-primary/50',
+                )}
+                style={{
+                  background: `linear-gradient(135deg, ${preset.color1}, ${preset.color2})`,
+                }}
+                title={preset.name}
+              >
+                <div className="absolute bottom-1 left-1 right-1 text-[10px] text-white/80 truncate text-center">
+                  {preset.name}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div>
+        <h5 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">Custom Colors</h5>
+        <div className="flex flex-col items-start gap-3">
+          <ColorPickerRoundedRect
+            label="Color 1"
+            color={localColors.color1}
+            name="animatedColor1"
+            onChange={(e) => setLocalColors((p) => ({ ...p, color1: e.target.value }))}
+            size="sm"
+          />
+          <ColorPickerRoundedRect
+            label="Color 2"
+            color={localColors.color2}
+            name="animatedColor2"
+            onChange={(e) => setLocalColors((p) => ({ ...p, color2: e.target.value }))}
+            size="sm"
+          />
+        </div>
+      </div>
+      <Button onClick={applyCustom} size="sm" className="w-full">
+        <PaintBrushIcon className="w-4 h-4 mr-2" />
+        Apply Animated Background
+      </Button>
+    </div>
+  )
+}
 
 // --- Sub-components for each tab ---
 
@@ -325,6 +423,7 @@ export function BackgroundSettings() {
     { id: 'wallpaper', name: 'Wallpaper', component: <WallpaperSelector /> },
     { id: 'color', name: 'Color', component: <ColorSelector /> },
     { id: 'gradient', name: 'Gradient', component: <GradientSelector /> },
+    { id: 'animated', name: 'Motion', component: <AnimatedSelector /> },
     { id: 'image', name: 'Image', component: <ImageSelector /> },
   ]
 
@@ -336,11 +435,11 @@ export function BackgroundSettings() {
     >
       <div className="space-y-6">
         <div className="relative p-1 bg-muted/50 rounded-full">
-          <div className="relative grid grid-cols-4 gap-1">
+          <div className="relative grid grid-cols-5 gap-1">
             <div
               className="absolute top-0 left-0 h-full bg-background rounded-full shadow-sm transition-all duration-300 ease-out border border-sidebar-border"
               style={{
-                width: `calc(25% - 0.125rem)`,
+                width: `calc(20% - 0.2rem)`,
                 transform: `translateX(calc(${tabs.findIndex((t) => t.id === activeTab) * 100}% + ${tabs.findIndex((t) => t.id === activeTab) * 0.25}rem))`,
               }}
             />
