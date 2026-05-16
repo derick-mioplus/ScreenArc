@@ -200,7 +200,10 @@ export function EditorPage() {
       >
         <Settings className="w-4 h-4" />
       </Button>,
-      updateInfo && <UpdateNotification key="update" info={updateInfo} />,
+      // Update notification disabled in this fork — checks upstream tamnguyenvan/screenarc
+      // releases, which doesn't apply since this is a personal fork. Re-enable by changing
+      // the `false` below to `updateInfo` if/when we wire it to check the fork's releases.
+      false && updateInfo && <UpdateNotification key="update" info={updateInfo} />,
     ].filter(Boolean)
 
     if (isWindows) {
