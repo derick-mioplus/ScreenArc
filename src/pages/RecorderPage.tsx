@@ -35,6 +35,16 @@ const WINDOWS_SCALES = [
   { value: 1, label: '1x' },
 ]
 
+// Frosted-glass palette for the recorder bar. Flip GLASS_MODE to preview the
+// light vs dark direction live. NOTE: true desktop-blur is added later via the
+// window's "acrylic" material (electron/main/windows/recorder-window.ts); this
+// is the CSS surface treatment (tone, border highlight, shadow, spacing).
+// Light frosted-glass surface for the recorder bar.
+const GLASS = {
+  bar: 'bg-white/90 backdrop-blur-2xl backdrop-saturate-150 border border-black/10 text-slate-900 shadow-[0_12px_44px_-8px_rgba(0,0,0,0.35),0_2px_8px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.9)]',
+  grip: 'text-slate-400/70',
+}
+
 // --- Types ---
 type RecordingState = 'idle' | 'preparing' | 'recording'
 type ActionInProgress = 'none' | 'recording' | 'loading'
@@ -424,7 +434,10 @@ export function RecorderPage() {
         <div data-interactive="true" className="relative">
           {/* Main Control Bar */}
           <div
-            className="relative flex items-center gap-3 px-4 py-3 rounded-2xl bg-card border border-border shadow-2xl"
+            className={cn(
+              'relative flex items-center gap-3 px-4 py-3 rounded-[20px] transition-colors',
+              GLASS.bar,
+            )}
             style={{ WebkitAppRegion: 'drag' }}
           >
             <button
@@ -437,6 +450,22 @@ export function RecorderPage() {
               <X className="w-3.5 h-3.5" />
             </button>
 
+            {/* Drag handle — makes it obvious the bar can be repositioned */}
+            <div
+              className={cn('flex items-center justify-center w-4 h-9 cursor-grab', GLASS.grip)}
+              style={{ WebkitAppRegion: 'drag' }}
+              aria-hidden="true"
+            >
+              <svg width="8" height="16" viewBox="0 0 8 16" fill="currentColor">
+                <circle cx="1.5" cy="3" r="1.3" />
+                <circle cx="6.5" cy="3" r="1.3" />
+                <circle cx="1.5" cy="8" r="1.3" />
+                <circle cx="6.5" cy="8" r="1.3" />
+                <circle cx="1.5" cy="13" r="1.3" />
+                <circle cx="6.5" cy="13" r="1.3" />
+              </svg>
+            </div>
+
             {/* Source Toggle */}
             <div
               className="flex items-center p-1 bg-muted/60 rounded-xl border border-border/50"
@@ -444,6 +473,7 @@ export function RecorderPage() {
             >
               <SourceButton
                 icon={<DeviceDesktop size={16} />}
+                label="Screen"
                 isActive={source === 'fullscreen'}
                 onClick={() => setSource('fullscreen')}
                 tooltip="Full Screen"
@@ -451,14 +481,15 @@ export function RecorderPage() {
               />
               <SourceButton
                 icon={<Marquee2 size={16} />}
+                label="Area"
                 isActive={source === 'area'}
                 onClick={() => setSource('area')}
-                tooltip="Area"
+                tooltip="Record a custom area"
                 disabled={isRecording || isBusy}
               />
             </div>
 
-            <div className="w-px h-8 bg-border/50"></div>
+            <div className="w-px h-[30px] bg-gradient-to-b from-transparent via-slate-500/25 to-transparent"></div>
 
             {/* Device Selectors */}
             <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' }}>
@@ -469,14 +500,15 @@ export function RecorderPage() {
               >
                 <SelectTrigger
                   variant="minimal"
-                  className="w-auto min-w-[120px] max-w-[150px] h-9"
+                  className="w-auto min-w-[140px] max-w-[185px] h-9"
                   aria-label="Select display"
                 >
                   <SelectValue asChild>
                     <div className="flex items-center gap-1.5 text-xs">
                       <DeviceDesktop size={14} className="text-primary shrink-0" />
                       <span className="truncate">
-                        {displays.find((d) => String(d.id) === selectedDisplayId)?.name || '...'}
+                        {displays.find((d) => String(d.id) === selectedDisplayId)?.name?.replace(/\s*\(.*\)\s*$/, '') ||
+                          '...'}
                       </span>
                     </div>
                   </SelectValue>
@@ -497,7 +529,7 @@ export function RecorderPage() {
               >
                 <SelectTrigger
                   variant="minimal"
-                  className="w-auto min-w-[120px] max-w-[150px] h-9"
+                  className="w-auto min-w-[140px] max-w-[185px] h-9"
                   aria-label="Select webcam"
                 >
                   <SelectValue asChild>
@@ -530,13 +562,17 @@ export function RecorderPage() {
               >
                 <SelectTrigger
                   variant="minimal"
-                  className="w-auto min-w-[120px] max-w-[150px] h-9"
+                  className={cn(
+                    'w-auto min-w-[140px] max-w-[185px] h-9',
+                    selectedMicId !== 'none' &&
+                      'bg-green-500/10 ring-1 ring-green-500/40 shadow-[0_0_14px_-2px_rgba(34,197,94,0.45)]',
+                  )}
                   aria-label="Select microphone"
                 >
                   <SelectValue asChild>
                     <div className="flex items-center gap-1.5 text-xs">
                       {selectedMicId !== 'none' ? (
-                        <Microphone size={14} className="text-primary shrink-0" />
+                        <Microphone size={14} className="text-green-500 shrink-0" />
                       ) : (
                         <MicrophoneOff size={14} className="text-muted-foreground/60" />
                       )}
@@ -601,7 +637,7 @@ export function RecorderPage() {
               )}
             </div>
 
-            <div className="w-px h-8 bg-border/50"></div>
+            <div className="w-px h-[30px] bg-gradient-to-b from-transparent via-slate-500/25 to-transparent"></div>
 
             {/* Cursor Scale (Linux Only) */}
             {platform === 'linux' && (
@@ -621,7 +657,7 @@ export function RecorderPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="w-px h-8 bg-border/50"></div>
+                <div className="w-px h-[30px] bg-gradient-to-b from-transparent via-slate-500/25 to-transparent"></div>
               </>
             )}
 
@@ -691,20 +727,27 @@ export function RecorderPage() {
 
 const SourceButton = ({
   icon,
+  label,
   isActive,
   tooltip,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: React.ReactNode; isActive: boolean; tooltip?: string }) => (
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  icon: React.ReactNode
+  label: string
+  isActive: boolean
+  tooltip?: string
+}) => (
   <button
     className={cn(
-      'flex items-center justify-center w-10 h-9 rounded-lg transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      'flex items-center justify-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring',
       isActive
-        ? 'bg-primary shadow-sm text-primary-foreground'
-        : 'text-muted-foreground hover:text-foreground hover:bg-background/50',
+        ? 'bg-white text-slate-800 shadow-[0_2px_6px_-2px_rgba(20,18,55,0.3),inset_0_1px_0_rgba(255,255,255,0.9)]'
+        : 'text-slate-500 hover:text-slate-800 hover:bg-white/40',
     )}
     title={tooltip}
     {...props}
   >
     {icon}
+    <span>{label}</span>
   </button>
 )
