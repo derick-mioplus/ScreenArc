@@ -35,9 +35,12 @@ export default defineConfig({
                 format: 'cjs',
                 entryFileNames: '[name].cjs',
               },
-              // Fix for #137: Externalize native modules
-              // These modules need to be loaded at runtime, not bundled
-              external: nativeModules,
+              // Fix for #137: Externalize native modules (loaded at runtime, not bundled).
+              // Also externalize electron-store (kept on CJS v8): bundling it pulls in
+              // electron-store -> conf -> ajv (circular CJS), which vite-plugin-electron
+              // intermittently corrupts in the .cjs output (upstream issue #148). Loading
+              // it at runtime avoids the fragile ESM->CJS transpilation entirely.
+              external: [...nativeModules, 'electron-store'],
             },
           },
         },
