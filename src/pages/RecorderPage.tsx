@@ -45,6 +45,12 @@ const GLASS = {
   grip: 'text-slate-400/70',
 }
 
+// Device names often carry a trailing hardware qualifier like
+// "Microphone Array (Realtek(R) Audio)" that clutters the bar and gets
+// truncated. Strip the trailing parenthetical for display only — the id/value
+// the dropdowns bind to is unchanged, so selection still works.
+const cleanDeviceName = (name?: string) => (name ?? '').replace(/\s*\(.*\)\s*$/, '').trim() || (name ?? '')
+
 // --- Types ---
 type RecordingState = 'idle' | 'preparing' | 'recording'
 type ActionInProgress = 'none' | 'recording' | 'loading'
@@ -257,8 +263,28 @@ export function RecorderPage() {
     const startStream = async () => {
       stopStream()
       try {
-        const constraints = { video: platform === 'win32' ? true : { deviceId: { exact: selectedWebcamId } } }
-        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        // On Windows the stored webcam id is a dshow `alternativeName` (what
+        // FFmpeg uses for the actual recording). getUserMedia can't consume that
+        // id, so the old code fell back to `video: true` and always showed the
+        // default camera in the preview. Resolve the matching WebRTC device by
+        // its human-readable label instead. Labels are only exposed after a
+        // getUserMedia grant, so probe once if they're still blank. Falls back
+        // to `true` (the previous behavior) if no label match is found, so this
+        // can never preview less than it did before.
+        let videoConstraint: boolean | MediaTrackConstraints = { deviceId: { exact: selectedWebcamId } }
+        if (platform === 'win32') {
+          const norm = (s?: string) => (s ?? '').trim().toLowerCase()
+          const selectedName = webcams.find((w) => w.id === selectedWebcamId)?.name
+          let devices = await navigator.mediaDevices.enumerateDevices()
+          if (!devices.some((d) => d.kind === 'videoinput' && d.label)) {
+            const probe = await navigator.mediaDevices.getUserMedia({ video: true })
+            probe.getTracks().forEach((t) => t.stop())
+            devices = await navigator.mediaDevices.enumerateDevices()
+          }
+          const match = devices.find((d) => d.kind === 'videoinput' && norm(d.label) === norm(selectedName))
+          videoConstraint = match ? { deviceId: { exact: match.deviceId } } : true
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint })
         webcamStreamRef.current = stream
         if (videoEl) videoEl.srcObject = stream
       } catch (error) {
@@ -268,7 +294,7 @@ export function RecorderPage() {
 
     startStream()
     return stopStream
-  }, [selectedWebcamId, platform, recordingState])
+  }, [selectedWebcamId, platform, recordingState, webcams])
 
   const handleStart = async () => {
     if (isRecording || actionInProgressRef.current !== 'none') return
@@ -507,8 +533,7 @@ export function RecorderPage() {
                     <div className="flex items-center gap-1.5 text-xs">
                       <DeviceDesktop size={14} className="text-primary shrink-0" />
                       <span className="truncate">
-                        {displays.find((d) => String(d.id) === selectedDisplayId)?.name?.replace(/\s*\(.*\)\s*$/, '') ||
-                          '...'}
+                        {cleanDeviceName(displays.find((d) => String(d.id) === selectedDisplayId)?.name) || '...'}
                       </span>
                     </div>
                   </SelectValue>
@@ -540,7 +565,7 @@ export function RecorderPage() {
                         <DeviceComputerCameraOff size={14} className="text-muted-foreground/60" />
                       )}
                       <span className={cn('truncate', selectedWebcamId === 'none' && 'text-muted-foreground')}>
-                        {webcams.find((w) => w.id === selectedWebcamId)?.name || 'No webcam'}
+                        {cleanDeviceName(webcams.find((w) => w.id === selectedWebcamId)?.name) || 'No webcam'}
                       </span>
                     </div>
                   </SelectValue>
@@ -577,7 +602,7 @@ export function RecorderPage() {
                         <MicrophoneOff size={14} className="text-muted-foreground/60" />
                       )}
                       <span className={cn('truncate', selectedMicId === 'none' && 'text-muted-foreground')}>
-                        {mics.find((m) => m.id === selectedMicId)?.name || 'No microphone'}
+                        {cleanDeviceName(mics.find((m) => m.id === selectedMicId)?.name) || 'No microphone'}
                       </span>
                     </div>
                   </SelectValue>
