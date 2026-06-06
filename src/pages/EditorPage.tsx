@@ -4,7 +4,6 @@ import { Preview } from '../components/editor/Preview'
 import { SidePanel } from '../components/editor/SidePanel'
 import { Timeline } from '../components/editor/Timeline'
 import { PreviewControls } from '../components/editor/PreviewControls'
-import { UpdateNotification } from '../components/editor/UpdateNotification'
 import { ExportButton } from '../components/editor/ExportButton'
 import { ExportModal } from '../components/editor/ExportModal'
 import { WindowControls } from '../components/editor/WindowControls'
@@ -52,7 +51,6 @@ export function EditorPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isPresetModalOpen, setPresetModalOpen] = useState(false)
   const [isSettingsModalOpen, setSettingsModalOpen] = useState(false)
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; url: string } | null>(null)
   const [platform, setPlatform] = useState<NodeJS.Platform | null>(null)
 
   const handleDeleteSelectedRegion = useCallback(() => {
@@ -132,13 +130,6 @@ export function EditorPage() {
   }, [isPreviewFullScreen, togglePreviewFullScreen])
 
   useEffect(() => {
-    const cleanup = window.electronAPI.onUpdateAvailable((info: { version: string; url: string }) => {
-      setUpdateInfo(info)
-    })
-    return () => cleanup()
-  }, [])
-
-  useEffect(() => {
     window.electronAPI.getPlatform().then(setPlatform)
     initializeSettings()
     const cleanup = window.electronAPI.onProjectOpen(async (payload) => {
@@ -200,10 +191,6 @@ export function EditorPage() {
       >
         <Settings className="w-4 h-4" />
       </Button>,
-      // Update notification disabled in this fork — checks upstream tamnguyenvan/screenarc
-      // releases, irrelevant for personal fork. Re-enable by uncommenting if we ever
-      // wire it to check this fork's releases.
-      // updateInfo && <UpdateNotification key="update" info={updateInfo} />,
     ].filter(Boolean)
 
     if (isWindows) {
