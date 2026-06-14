@@ -3,6 +3,9 @@ const { ipcRenderer } = require('electron');
 const selectionBox = document.getElementById('selection-box');
 const sizeBadge = document.getElementById('size-badge');
 const tooltip = document.getElementById('tooltip');
+const controls = document.getElementById('controls');
+const recordBtn = document.getElementById('record-btn');
+const cancelBtn = document.getElementById('cancel-btn');
 
 let selection = { x: 0, y: 0, width: 0, height: 0 };
 let action = null; // 'drawing', 'moving', 'resizing'
@@ -46,6 +49,12 @@ function updateSizeBadge() {
     } else {
         sizeBadge.style.display = 'none';
     }
+}
+
+// Show the Record/Cancel bar once a usable selection exists.
+function updateControls() {
+    const hasSelection = selection.width > 10 && selection.height > 10;
+    controls.style.display = hasSelection ? 'flex' : 'none';
 }
 
 // --- Event Handlers ---
@@ -136,6 +145,7 @@ function onMouseMove(e) {
 
     updateSelectionBox();
     updateSizeBadge();
+    updateControls();
 }
 
 function onMouseUp() {
@@ -145,17 +155,29 @@ function onMouseUp() {
     window.removeEventListener('mouseup', onMouseUp);
 }
 
-function onKeyDown(e) {
-    if (e.key === 'Enter' && selection.width > 10 && selection.height > 10) {
-        // We don't need to adjust size here, main process will do it.
+// Confirm/cancel are shared by the keyboard shortcuts and the on-screen
+// buttons so both do exactly the same thing. Size isn't adjusted here — the
+// main process rounds to even dimensions for the encoder.
+function completeSelection() {
+    if (selection.width > 10 && selection.height > 10) {
         ipcRenderer.send('selection:complete', {
             x: Math.round(selection.x),
             y: Math.round(selection.y),
             width: Math.round(selection.width),
             height: Math.round(selection.height),
         });
+    }
+}
+
+function cancelSelection() {
+    ipcRenderer.send('selection:cancel');
+}
+
+function onKeyDown(e) {
+    if (e.key === 'Enter') {
+        completeSelection();
     } else if (e.key === 'Escape') {
-        ipcRenderer.send('selection:cancel');
+        cancelSelection();
     }
 }
 
@@ -163,3 +185,16 @@ function onKeyDown(e) {
 // Attach the listener to the document to handle all clicks via event delegation
 document.addEventListener('mousedown', onMouseDown);
 window.addEventListener('keydown', onKeyDown);
+
+// Stop clicks on the controls from reaching the document handler (which would
+// start a new selection and wipe the current one), then wire the buttons to
+// the same actions as Enter/Esc.
+controls.addEventListener('mousedown', (e) => e.stopPropagation());
+recordBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    completeSelection();
+});
+cancelBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cancelSelection();
+});
