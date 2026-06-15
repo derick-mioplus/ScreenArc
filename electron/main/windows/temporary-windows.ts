@@ -1,6 +1,6 @@
 // Logic to create temporary windows like countdown, saving, selection.
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import path from 'node:path'
 import { appState } from '../state'
 import { VITE_DEV_SERVER_URL, RENDERER_DIST, PRELOAD_SCRIPT } from '../lib/constants'
@@ -52,4 +52,42 @@ export function createSelectionWindow() {
   appState.selectionWin.on('closed', () => {
     appState.selectionWin = null
   })
+}
+
+// A small always-on-top "● REC + elapsed time + Stop" control shown during
+// recording, so the user always has a visible, reachable way to stop without
+// hunting for the tray icon.
+export function createStopControlWindow() {
+  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize
+  const windowWidth = 196
+  const windowHeight = 52
+  const x = Math.round((screenWidth - windowWidth) / 2)
+  const y = 24
+
+  appState.stopControlWin = createTemporaryWindow(
+    { width: windowWidth, height: windowHeight, x, y, show: false, focusable: false, skipTaskbar: true },
+    'stop-control/index.html',
+  )
+
+  // Visible to the user but excluded from screen capture (FFmpeg/gdigrab), so the
+  // control never appears in the recording. The rest of the app avoids capture by
+  // hiding the recorder window; this control must stay on-screen, so it relies on
+  // content protection instead. (focusable:false so it never steals focus from the
+  // app being recorded.)
+  appState.stopControlWin.setContentProtection(true)
+
+  appState.stopControlWin.once('ready-to-show', () => {
+    appState.stopControlWin?.show()
+  })
+
+  appState.stopControlWin.on('closed', () => {
+    appState.stopControlWin = null
+  })
+}
+
+export function closeStopControlWindow() {
+  if (appState.stopControlWin && !appState.stopControlWin.isDestroyed()) {
+    appState.stopControlWin.close()
+  }
+  appState.stopControlWin = null
 }

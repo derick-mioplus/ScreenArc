@@ -45,6 +45,7 @@ interface AppState {
   renderWorker: BrowserWindow | null
   savingWin: BrowserWindow | null
   selectionWin: BrowserWindow | null
+  stopControlWin: BrowserWindow | null
 
   // System
   tray: Tray | null
@@ -73,6 +74,7 @@ export const appState: AppState = {
   renderWorker: null,
   savingWin: null,
   selectionWin: null,
+  stopControlWin: null,
   tray: null,
   ffmpegProcess: null,
   mouseTracker: null,

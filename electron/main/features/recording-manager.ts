@@ -12,7 +12,12 @@ import { VITE_PUBLIC } from '../lib/constants'
 import { createMouseTracker } from './mouse-tracker'
 import { getCursorScale, restoreOriginalCursorScale, resetCursorScale } from './cursor-manager'
 import { createEditorWindow, cleanupEditorFiles } from '../windows/editor-window'
-import { createSavingWindow, createSelectionWindow } from '../windows/temporary-windows'
+import {
+  createSavingWindow,
+  createSelectionWindow,
+  createStopControlWindow,
+  closeStopControlWindow,
+} from '../windows/temporary-windows'
 import type { RecordingSession, RecordingGeometry } from '../state'
 import { SystemAudioWriter } from './system-audio-writer'
 import { ScreenVideoWriter } from './screen-video-writer'
@@ -378,6 +383,7 @@ async function startActualRecording(
   appState.recorderWin?.webContents.send('recording-started')
 
   createTray()
+  createStopControlWindow()
   return { canceled: false, ...appState.currentRecordingSession }
 }
 
@@ -497,6 +503,9 @@ function createTray() {
   ])
   appState.tray.setToolTip('ScreenArc is recording...')
   appState.tray.setContextMenu(contextMenu)
+  // Windows: with only setContextMenu, a left-click does nothing — which reads as
+  // an unresponsive tray. Pop the same menu on left-click too.
+  appState.tray.on('click', () => appState.tray?.popUpContextMenu())
 }
 
 /**
@@ -734,6 +743,7 @@ export async function stopRecording() {
   log.info('[StopRecord] Stopping recording, preparing to save...')
   appState.tray?.destroy()
   appState.tray = null
+  closeStopControlWindow()
   createSavingWindow()
 
   const session = appState.currentRecordingSession
@@ -1148,6 +1158,7 @@ export async function cleanupAndDiscard() {
   restoreOriginalCursorScale()
   appState.tray?.destroy()
   appState.tray = null
+  closeStopControlWindow()
 
   // Asynchronously delete files to not block the UI
   setTimeout(async () => {
